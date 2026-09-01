@@ -1,0 +1,1577 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>YVP Timekeeping System</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Segoe UI',sans-serif;background:linear-gradient(135deg,#1a237e,#1565c0);min-height:100vh;color:#333}
+#liveClock{position:fixed;top:14px;right:24px;color:#fff;font-size:13px;font-weight:600;background:rgba(255,255,255,0.15);padding:6px 14px;border-radius:20px;z-index:9999}
+#toast{position:fixed;bottom:32px;left:50%;transform:translateX(-50%);background:#1b5e20;color:#fff;padding:14px 32px;border-radius:30px;font-size:15px;font-weight:600;display:none;z-index:99999}
+#toast.error{background:#b71c1c}
+.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:10000;align-items:center;justify-content:center}
+.modal-overlay.active{display:flex}
+.modal-box{background:#fff;border-radius:16px;padding:36px 40px;max-width:480px;width:92%;box-shadow:0 20px 60px rgba(0,0,0,0.35);text-align:center;position:relative}
+.modal-box h3{font-size:20px;color:#1a237e;margin-bottom:10px}
+.modal-box p{color:#555;margin-bottom:22px;font-size:14px}
+.modal-close{position:absolute;top:14px;right:18px;background:none;border:none;font-size:22px;cursor:pointer;color:#999}
+.modal-btn{padding:11px 36px;border:none;border-radius:8px;font-size:15px;font-weight:700;cursor:pointer;background:#1a237e;color:#fff}
+.app-wrapper{display:flex;min-height:100vh}
+#sidebar{width:240px;background:rgba(255,255,255,0.07);display:flex;flex-direction:column;position:fixed;top:0;left:0;height:100%;z-index:100;padding-bottom:24px;border-right:1px solid rgba(255,255,255,0.12)}
+.sidebar-logo{padding:24px 20px 16px;border-bottom:1px solid rgba(255,255,255,0.12)}
+.sidebar-logo h1{color:#fff;font-size:15px;font-weight:800}
+.sidebar-logo span{display:block;color:rgba(255,255,255,0.5);font-size:10px;margin-top:3px;letter-spacing:1px}
+.sidebar-user{padding:14px 20px;border-bottom:1px solid rgba(255,255,255,0.1)}
+.user-avatar{width:72px;height:96px;border-radius:8px;background:linear-gradient(135deg,#42a5f5,#1565c0);display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;color:#fff;margin-bottom:6px;background-size:cover;background-position:center;overflow:hidden;border:2px solid rgba(255,255,255,0.3)}
+.user-name{color:#fff;font-size:13px;font-weight:600}
+.user-role{color:rgba(255,255,255,0.5);font-size:11px;text-transform:uppercase;letter-spacing:1px}
+.sidebar-nav{flex:1;padding:12px 0;overflow-y:auto}
+.nav-item{display:flex;align-items:center;gap:10px;padding:10px 20px;color:rgba(255,255,255,0.75);cursor:pointer;font-size:13px;border-left:3px solid transparent;transition:all 0.2s}
+.nav-item:hover{background:rgba(255,255,255,0.1);color:#fff}
+.nav-item.active{background:rgba(255,255,255,0.15);color:#fff;border-left-color:#64b5f6;font-weight:600}
+.sidebar-logout{padding:0 14px}
+.btn-logout{width:100%;padding:10px;background:rgba(244,67,54,0.2);border:1px solid rgba(244,67,54,0.4);color:#ef9a9a;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer}
+.btn-logout:hover{background:rgba(244,67,54,0.4);color:#fff}
+.main-content{margin-left:240px;flex:1;padding:30px}
+.page-section{display:none}
+.page-section.active{display:block}
+.page-header{margin-bottom:24px}
+.page-header h2{color:#fff;font-size:24px;font-weight:700}
+.page-header p{color:rgba(255,255,255,0.6);font-size:13px;margin-top:4px}
+.card{background:#fff;border-radius:14px;padding:24px;box-shadow:0 4px 20px rgba(0,0,0,0.12);margin-bottom:20px}
+.card h3{font-size:16px;color:#1a237e;font-weight:700;margin-bottom:16px;padding-bottom:10px;border-bottom:2px solid #e8eaf6}
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:16px;margin-bottom:20px}
+.stat-card{background:#fff;border-radius:12px;padding:20px;box-shadow:0 4px 16px rgba(0,0,0,0.1);border-left:5px solid #1a237e}
+.stat-card.green{border-left-color:#2e7d32}
+.stat-card.orange{border-left-color:#e65100}
+.stat-card.red{border-left-color:#c62828}
+.stat-label{color:#777;font-size:11px;text-transform:uppercase;letter-spacing:1px}
+.stat-value{font-size:30px;font-weight:800;margin-top:4px;color:#1a237e}
+.stat-card.green .stat-value{color:#2e7d32}
+.stat-card.orange .stat-value{color:#e65100}
+.stat-card.red .stat-value{color:#c62828}
+.form-group{margin-bottom:16px}
+.form-group label{display:block;font-size:12px;font-weight:600;color:#444;margin-bottom:5px}
+.form-group input,.form-group select{width:100%;padding:9px 12px;border:1.5px solid #ddd;border-radius:8px;font-size:13px;background:#fafafa}
+.form-group input:focus,.form-group select:focus{outline:none;border-color:#1a237e;background:#fff}
+.form-row{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.btn{padding:9px 20px;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:6px;transition:all 0.2s}
+.btn-primary{background:#1a237e;color:#fff}
+.btn-primary:hover{background:#283593}
+.btn-success{background:#2e7d32;color:#fff}
+.btn-success:hover{background:#388e3c}
+.btn-danger{background:#c62828;color:#fff}
+.btn-danger:hover{background:#d32f2f}
+.btn-secondary{background:#546e7a;color:#fff}
+.btn-secondary:hover{background:#607d8b}
+.btn-warning{background:#f57f17;color:#fff}
+.btn-sm{padding:5px 12px;font-size:11px}
+.btn:disabled{opacity:0.5;cursor:not-allowed}
+.table-wrapper{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:12px}
+thead th{background:#1a237e;color:#fff;padding:10px 12px;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:0.5px}
+tbody tr:nth-child(even){background:#f5f5f5}
+tbody tr:hover{background:#e8eaf6}
+tbody td{padding:10px 12px;border-bottom:1px solid #eee}
+.badge{display:inline-block;padding:3px 9px;border-radius:20px;font-size:10px;font-weight:700}
+.badge-success{background:#e8f5e9;color:#2e7d32}
+.badge-warning{background:#fff3e0;color:#e65100}
+.badge-danger{background:#ffebee;color:#c62828}
+.badge-info{background:#e3f2fd;color:#0d47a1}
+.badge-secondary{background:#eceff1;color:#546e7a}
+#loginScreen{position:fixed;inset:0;z-index:5000;background:linear-gradient(135deg,#1a237e,#1565c0);display:flex;align-items:center;justify-content:center}
+.login-card{background:#fff;border-radius:20px;padding:44px 40px;max-width:400px;width:92%;box-shadow:0 24px 64px rgba(0,0,0,0.4);text-align:center}
+.login-logo{font-size:48px;margin-bottom:8px}
+.login-card h1{font-size:22px;color:#1a237e;font-weight:800;margin-bottom:4px}
+.login-card .subtitle{color:#888;font-size:12px;margin-bottom:26px}
+.login-card .form-group{text-align:left}
+.login-btn{width:100%;padding:12px;background:#1a237e;color:#fff;border:none;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;margin-top:4px}
+.login-btn:hover{background:#283593}
+.login-error{color:#c62828;font-size:12px;margin-top:8px;display:none;font-weight:600;text-align:center}
+.punch-row{display:flex;gap:10px;margin-bottom:14px}
+.punch-row input{flex:1;padding:12px 14px;border:2px solid #ddd;border-radius:10px;font-size:15px;font-weight:600}
+.punch-row input:focus{outline:none;border-color:#1a237e}
+.btn-find{padding:12px 20px;background:#1a237e;color:#fff;border:none;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer}
+.punch-info{background:#e8eaf6;border-radius:10px;padding:16px 20px;margin-bottom:14px;display:none}
+.punch-name{font-size:18px;font-weight:700;color:#1a237e}
+.punch-sub{font-size:12px;color:#666;margin-top:3px}
+.punch-sched{font-size:12px;color:#444;margin-top:6px;background:#fff;padding:6px 10px;border-radius:6px}
+.punch-btns{display:flex;gap:12px}
+.btn-in{flex:1;padding:14px;background:#2e7d32;color:#fff;border:none;border-radius:10px;font-size:16px;font-weight:700;cursor:pointer;transition:all 0.2s}
+.btn-in:hover:not(:disabled){background:#388e3c;transform:translateY(-2px)}
+.btn-out{flex:1;padding:14px;background:#c62828;color:#fff;border:none;border-radius:10px;font-size:16px;font-weight:700;cursor:pointer;transition:all 0.2s}
+.btn-out:hover:not(:disabled){background:#d32f2f;transform:translateY(-2px)}
+.btn-in:disabled,.btn-out:disabled{opacity:0.4;cursor:not-allowed;transform:none}
+.upload-zone{border:2px dashed #9fa8da;border-radius:10px;padding:30px 20px;text-align:center;cursor:pointer;background:#f8f9ff;margin-bottom:14px}
+.upload-zone:hover{border-color:#1a237e;background:#e8eaf6}
+.filter-row{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-bottom:16px}
+.filter-row .form-group{margin-bottom:0;min-width:140px}
+.modal-footer{display:flex;gap:10px;justify-content:flex-end;margin-top:14px}
+#assignModal .modal-box,.sched-modal-box{max-width:480px;text-align:left}
+</style>
+</head>
+<body>
+<div id="liveClock">⏰ --:--:--</div>
+<div id="toast"></div>
+
+<!-- INFO MODAL -->
+<div class="modal-overlay" id="infoModal">
+  <div class="modal-box">
+    <button class="modal-close" onclick="closeModal('infoModal')">✕</button>
+    <div style="font-size:48px;margin-bottom:10px" id="modalIcon">✅</div>
+    <h3 id="modalTitle">Success</h3>
+    <p id="modalMessage">Done.</p>
+    <button class="modal-btn" onclick="closeModal('infoModal')">OK</button>
+  </div>
+</div>
+
+
+<!-- RESET PASSWORD MODAL -->
+<div class="modal-overlay" id="resetPassModal">
+  <div class="modal-box" style="max-width:420px;text-align:left">
+    <button class="modal-close" onclick="closeModal('resetPassModal')">✕</button>
+    <h3 style="color:#1a237e;margin-bottom:6px">🔑 Reset Password</h3>
+    <p style="font-size:13px;color:#666;margin-bottom:16px">Reset login password for this user.</p>
+    <input type="hidden" id="resetUsername"/>
+    <div class="form-group">
+      <label>User</label>
+      <input type="text" id="resetUserDisplay" readonly style="background:#f0f0f0"/>
+    </div>
+    <div class="form-group">
+      <label>New Password *</label>
+      <input type="text" id="resetNewPassword" placeholder="Enter new password"/>
+    </div>
+    <div class="form-group">
+      <label>Confirm Password *</label>
+      <input type="text" id="resetConfirmPassword" placeholder="Re-enter new password"/>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('resetPassModal')">Cancel</button>
+      <button class="btn btn-warning" onclick="saveResetPassword()">💾 Reset Password</button>
+    </div>
+  </div>
+</div>
+
+
+<!-- EDIT SCHEDULE MODAL -->
+<div class="modal-overlay" id="editSchedModal">
+  <div class="modal-box" style="max-width:440px;text-align:left">
+    <button class="modal-close" onclick="closeModal('editSchedModal')">✕</button>
+    <h3 style="color:#1a237e;margin-bottom:6px">✏️ Edit Work Schedule</h3>
+    <p style="font-size:13px;color:#666;margin-bottom:16px">Update the schedule details below.</p>
+    <input type="hidden" id="editSchedOldYvpId"/>
+    <input type="hidden" id="editSchedOldDate"/>
+    <div class="form-group">
+      <label>YVP ID</label>
+      <input type="text" id="editSchedYvpId" readonly style="background:#f0f0f0"/>
+    </div>
+    <div class="form-group">
+      <label>Employee Name</label>
+      <input type="text" id="editSchedEmpName" readonly style="background:#f0f0f0"/>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>From Date (MM/DD/YYYY) *</label>
+        <input type="text" id="editSchedFrom" placeholder="e.g. 09/01/2026"/>
+      </div>
+      <div class="form-group">
+        <label>To Date (MM/DD/YYYY) *</label>
+        <input type="text" id="editSchedTo" placeholder="e.g. 09/07/2026"/>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Schedule *</label>
+      <input type="text" id="editSchedShift" placeholder="e.g. 9PM - 6AM"/>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('editSchedModal')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveEditSchedule()">💾 Save Changes</button>
+    </div>
+  </div>
+</div>
+
+<!-- LOGIN -->
+<div id="loginScreen">
+  <div class="login-card">
+    <div class="login-logo">🏢</div>
+    <h1>YVP Timekeeping</h1>
+    <p class="subtitle">Employee Time Management System</p>
+    <div class="form-group">
+      <label>Username</label>
+      <input type="text" id="sysUsername" placeholder="Username" autocomplete="off"/>
+    </div>
+    <div class="form-group">
+      <label>Password</label>
+      <input type="password" id="sysPassword" placeholder="Password"
+        onkeydown="if(event.key==='Enter')doLogin()"/>
+    </div>
+    <div class="login-error" id="loginErr">❌ Invalid username or password.</div>
+    <button class="login-btn" onclick="doLogin()">🔐 Login</button>
+    <p style="margin-top:14px;font-size:11px;color:#aaa">Default → User: <b>admin</b> | Pass: <b>admin123</b></p>
+  </div>
+</div>
+
+<!-- MAIN APP -->
+<div class="app-wrapper" id="mainApp" style="display:none">
+  <nav id="sidebar">
+    <div class="sidebar-logo">
+      <h1>🏢 YVP Timekeeping</h1>
+      <span>TIME MANAGEMENT SYSTEM</span>
+      <span style="display:block;color:rgba(255,255,255,0.4);font-size:9px;margin-top:6px;letter-spacing:0.5px">Powered by JAINova Studio</span>
+    </div>
+    <div class="sidebar-user">
+      <div style="position:relative;display:inline-block;margin-bottom:8px">
+        <div class="user-avatar" id="sbAvatar" style="width:72px;height:96px;border-radius:8px;cursor:pointer;font-size:22px" title="Click to upload photo" onclick="document.getElementById('profilePicInput').click()">?</div>
+        <div style="position:absolute;bottom:2px;right:2px;background:#1a237e;color:#fff;border-radius:50%;width:22px;height:22px;display:flex;align-items:center;justify-content:center;font-size:11px;cursor:pointer;border:2px solid #fff" onclick="document.getElementById('profilePicInput').click()" title="Upload photo">📷</div>
+      </div>
+      <input type="file" id="profilePicInput" accept="image/*" style="display:none" onchange="handleProfilePicUpload(event)"/>
+      <div class="user-name" id="sbName">—</div>
+      <div class="user-role" id="sbRole">—</div>
+    </div>
+    <div class="sidebar-nav" id="sidebarNav"></div>
+    <div class="sidebar-logout">
+      <button class="btn-logout" onclick="doLogout()">🚪 Sign Out</button>
+    </div>
+  </nav>
+  <main class="main-content">
+    <!-- DASHBOARD -->
+    <section class="page-section" id="sec-dashboard">
+      <div class="page-header"><h2>📊 Dashboard</h2><p>Welcome to YVP Timekeeping</p></div>
+
+      <!-- CLOCK IN / CLOCK OUT CARD -->
+      <div class="card" id="clockCard" style="max-width:520px;margin:0 auto 24px;text-align:center">
+        <h3>⏱️ My Attendance Today</h3>
+        <div id="clockStatus" style="margin-bottom:16px;font-size:15px;color:#555">Checking status...</div>
+        <div id="clockTimes" style="margin-bottom:18px;font-size:14px;color:#333"></div>
+        <div style="display:flex;gap:16px;justify-content:center">
+          <button class="btn-in" id="btnClockIn" onclick="clockIn()" style="display:none;min-width:160px">✅ CLOCK IN</button>
+          <button class="btn-out" id="btnClockOut" onclick="clockOut()" style="display:none;min-width:160px">🚪 CLOCK OUT</button>
+        </div>
+      </div>
+
+      <!-- MY SCHEDULE -->
+      <div class="card" id="myScheduleCard">
+        <h3>📅 My Work Schedule</h3>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th>From Date</th><th>To Date</th><th>Schedule</th></tr></thead>
+            <tbody id="myScheduleTbody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- TODAY'S ATTENDANCE (Manager only) -->
+      <div class="card" id="todayAttendanceCard" style="display:none">
+        <h3>📋 Today's Attendance (All Employees)</h3>
+        <div class="stats-grid" id="dashStats" style="margin-bottom:16px"></div>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th>YVP ID</th><th>Name</th><th>Time In</th><th>Time Out</th><th>Total Hours</th><th>Status</th><th>Actions</th></tr></thead>
+            <tbody id="todayTbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+    <!-- EMPLOYEES -->
+    <section class="page-section" id="sec-employees">
+      <div class="page-header"><h2>👥 Employees</h2><p>Manage employee records</p></div>
+      <div class="card">
+        <h3>📤 Bulk Upload New Hires</h3>
+        <div class="upload-zone" id="uploadZone" onclick="document.getElementById('empFile').click()">
+          <div style="font-size:36px;margin-bottom:8px">📂</div>
+          <p><b>Click to upload Excel file</b></p>
+          <small style="color:#999">Required columns: YVP ID | Last Name | First Name | Middle Name | Birthday | Address | Email Address | Contact Number</small>
+        </div>
+        <input type="file" id="empFile" accept=".xlsx,.xls" style="display:none" onchange="handleEmpUpload(event)"/>
+        <div style="display:flex;gap:10px;margin-top:8px;flex-wrap:wrap">
+          <button class="btn btn-secondary" onclick="downloadEmpTemplate()">⬇️ Download Template</button>
+          <span id="uploadStatus" style="font-size:13px;color:#555;align-self:center"></span>
+        </div>
+      </div>
+      <div class="card">
+        <h3>👥 Employee List</h3>
+        <div class="filter-row">
+          <div class="form-group" style="flex:1">
+            <label>Search</label>
+            <input type="text" id="empSearch" placeholder="Name or YVP ID..." oninput="renderEmployees()"/>
+          </div>
+          <button class="btn btn-primary" onclick="showEmpForm()">➕ Add Employee</button>
+          <button class="btn btn-success" onclick="createAllRankFileLogins()">🔑 Create Logins for All</button>
+        </div>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr>
+              <th>YVP ID</th><th>Last Name</th><th>First Name</th><th>Middle Name</th>
+              <th>Position</th><th>Address</th><th>Birthday</th><th>Email</th><th>Contact</th><th>Actions</th>
+            </tr></thead>
+            <tbody id="empTbody"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="card" id="empForm" style="display:none">
+        <h3 id="empFormTitle">➕ Add Employee</h3>
+        <div class="form-row">
+          <div class="form-group"><label>YVP ID *</label><input type="text" id="fId" placeholder="YVP-0001"/></div>
+          <div class="form-group"><label>Last Name *</label><input type="text" id="fLast"/></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label>First Name *</label><input type="text" id="fFirst"/></div>
+          <div class="form-group"><label>Middle Name</label><input type="text" id="fMid"/></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label>Position</label><input type="text" id="fPosition" placeholder="e.g. Staff, Supervisor"/></div>
+          <div class="form-group"><label>Contact</label><input type="text" id="fContact"/></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label>Birthday</label><input type="date" id="fBday"/></div>
+          <div class="form-group"><label>Email</label><input type="email" id="fEmail"/></div>
+        </div>
+        <div class="form-group"><label>Address</label><input type="text" id="fAddr"/></div>
+        <input type="hidden" id="fEditId"/>
+        <div style="display:flex;gap:10px;margin-top:6px">
+          <button class="btn btn-success" onclick="saveEmployee()">💾 Save</button>
+          <button class="btn btn-secondary" onclick="document.getElementById('empForm').style.display='none'">Cancel</button>
+        </div>
+      </div>
+    </section>
+    <!-- SCHEDULE -->
+    <section class="page-section" id="sec-schedule">
+      <div class="page-header"><h2>📅 Work Schedule</h2><p>Manage employee work schedules</p></div>
+
+      <div class="card">
+        <h3>📤 Bulk Upload Work Schedules</h3>
+        <div class="upload-zone" onclick="document.getElementById('schedFile').click()">
+          <div style="font-size:36px;margin-bottom:8px">📂</div>
+          <p><b>Click to upload Excel file</b></p>
+          <small style="color:#999">Columns: YVP ID | From Date (MM/DD/YYYY) | To Date (MM/DD/YYYY) | Schedule (e.g. 9PM - 6AM)</small>
+        </div>
+        <input type="file" id="schedFile" accept=".xlsx,.xls" style="display:none" onchange="handleSchedUpload(event)"/>
+        <div style="display:flex;gap:10px;margin-top:8px;flex-wrap:wrap">
+          <button class="btn btn-secondary" onclick="downloadSchedTemplate()">⬇️ Download Template</button>
+          <button class="btn btn-success" onclick="exportWorkSchedules()">⬇️ Extract Work Schedule</button>
+          <span id="schedUploadStatus" style="font-size:13px;color:#555;align-self:center"></span>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>📋 All Work Schedules</h3>
+        <div class="filter-row">
+          <div class="form-group" style="flex:1">
+            <label>Search</label>
+            <input type="text" id="schedSearch" placeholder="YVP ID or Date..." oninput="renderAllSchedules()"/>
+          </div>
+        </div>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th>YVP ID</th><th>Employee Name</th><th>From Date</th><th>To Date</th><th>Schedule</th><th>Actions</th></tr></thead>
+            <tbody id="schedTbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+    <!-- REPORTS -->
+    <section class="page-section" id="sec-reports">
+      <div class="page-header"><h2>📈 Reports</h2><p>View and export attendance reports</p></div>
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
+          <h3 style="margin:0;border:none;padding:0">📋 Attendance Report</h3>
+          <div style="display:flex;gap:10px;flex-wrap:wrap">
+            <button class="btn btn-success" id="btnExportReport" onclick="exportAttendanceReport()">⬇️ Download Excel</button>
+            <button class="btn btn-secondary" onclick="renderReport()">🔄 Refresh</button>
+          </div>
+        </div>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr>
+              <th>YVP ID</th><th>Name</th><th>Date</th><th>Time In</th><th>Time Out</th><th>Total Hours</th><th>Status</th><th>Actions</th>
+            </tr></thead>
+            <tbody id="rptTbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+    <!-- USERS -->
+    <section class="page-section" id="sec-users">
+      <div class="page-header"><h2>🔐 User Management</h2><p>Manage system accounts and roles</p></div>
+
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+          <h3 style="margin:0;border:none;padding:0">👥 User Accounts</h3>
+          <button class="btn btn-primary" onclick="showAddManagerForm()">➕ Add Manager User</button>
+        </div>
+
+        <!-- Add Manager Form -->
+        <div id="addManagerForm" style="display:none;background:#f8f9ff;padding:20px;border-radius:10px;margin-bottom:20px">
+          <h4 style="color:#1a237e;margin-bottom:14px">➕ Create New Manager Account</h4>
+          <p style="font-size:13px;color:#666;margin-bottom:14px">Enter the employee's <b>YVP ID</b>. The system will create a Manager account using their employee record.</p>
+          <div class="form-group">
+            <label>YVP ID *</label>
+            <input type="text" id="mgrYvpId" placeholder="e.g. YVP-0001" style="max-width:280px"/>
+          </div>
+          <div style="display:flex;gap:10px;margin-top:8px">
+            <button class="btn btn-success" onclick="saveManagerUser()">💾 Save Manager</button>
+            <button class="btn btn-secondary" onclick="document.getElementById('addManagerForm').style.display='none'">Cancel</button>
+          </div>
+        </div>
+
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th>YVP ID</th><th>Name</th><th>Username</th><th>Role</th><th>Actions</th></tr></thead>
+            <tbody id="usersTbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script>
+// ── STORAGE ──────────────────────────────────────────
+function save(k,v){ localStorage.setItem(k, JSON.stringify(v)); }
+function load(k,d){ try{ const v=localStorage.getItem(k); return v!=null ? JSON.parse(v) : d; }catch(e){ return d; } }
+
+// ── SEED DEFAULT ADMIN + SAMPLE RANK & FILE ───────────
+(function(){
+  let u = load('yvp_users', []);
+  if(!u.find(x => x.username === 'admin')){
+    u.push({username:'admin', password:'admin123', role:'manager', yvpId:'ADMIN', name:'Administrator'});
+  }
+  // Sample Rank & File account for testing
+  if(!u.find(x => x.username === 'employee1')){
+    u.push({
+      username: 'employee1',
+      password: 'employee123',
+      role: 'rank_file',
+      yvpId: 'YVP-0001',
+      name: 'Sample Employee'
+    });
+  }
+  save('yvp_users', u);
+
+  // Also seed a sample employee record so schedule/name works
+  let emps = load('yvp_employees', []);
+  if(!emps.find(e => e.yvpId === 'YVP-0001')){
+    emps.push({
+      yvpId: 'YVP-0001',
+      lastName: 'Employee',
+      firstName: 'Sample',
+      middleName: '',
+      position: 'Staff',
+      birthday: '',
+      address: 'Sample Address',
+      email: 'sample@email.com',
+      contact: '09171234567'
+    });
+    save('yvp_employees', emps);
+  }
+})();
+
+let CU = null; // current user
+let PT = null; // punch target
+
+// ── CLOCK ─────────────────────────────────────────────
+function tickClock(){
+  const n = new Date();
+  document.getElementById('liveClock').textContent =
+    '⏰ ' + n.toLocaleDateString('en-PH',{month:'short',day:'numeric',year:'numeric'}) +
+    ' ' + n.toLocaleTimeString('en-PH');
+}
+setInterval(tickClock, 1000);
+tickClock();
+
+// ── TOAST ─────────────────────────────────────────────
+function showToast(msg, type='success', ms=2800){
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = type === 'error' ? 'error' : '';
+  t.style.display = 'block';
+  setTimeout(() => t.style.display = 'none', ms);
+}
+
+function closeModal(id){
+  document.getElementById(id).classList.remove('active');
+}
+
+function showInfoModal(title, message, icon='✅'){
+  document.getElementById('modalIcon').textContent = icon;
+  document.getElementById('modalTitle').textContent = title;
+  document.getElementById('modalMessage').textContent = message;
+  document.getElementById('infoModal').classList.add('active');
+}
+
+// ── LOGIN ─────────────────────────────────────────────
+function doLogin() {
+  const username = document.getElementById('sysUsername').value.trim();
+  const password = document.getElementById('sysPassword').value;
+  const errEl = document.getElementById('loginErr');
+  errEl.style.display = 'none';
+
+  if (!username || !password) {
+    errEl.textContent = '❌ Please enter both username and password.';
+    errEl.style.display = 'block';
+    return;
+  }
+
+  const users = load('yvp_users', []);
+  const user = users.find(u => u.username === username && u.password === password);
+
+  if (!user) {
+    errEl.textContent = '❌ Invalid username or password.';
+    errEl.style.display = 'block';
+    return;
+  }
+
+  CU = user;
+  document.getElementById('loginScreen').style.display = 'none';
+  document.getElementById('mainApp').style.display = 'flex';
+
+  document.getElementById('sbName').textContent = user.name || user.username;
+  // Show Position if available, otherwise role
+  const pos = getEmployeePosition(user.yvpId || user.username);
+  if (pos) {
+    document.getElementById('sbRole').textContent = pos;
+  } else {
+    document.getElementById('sbRole').textContent = user.role === 'manager' ? 'Manager' : 'Rank & File';
+  }
+  updateSidebarAvatar();
+
+  buildSidebar(user.role);
+  showSection('dashboard');
+  showToast('Welcome, ' + (user.name || user.username) + '!');
+}
+
+function doLogout() {
+  CU = null;
+  document.getElementById('mainApp').style.display = 'none';
+  document.getElementById('loginScreen').style.display = 'flex';
+  document.getElementById('sysUsername').value = '';
+  document.getElementById('sysPassword').value = '';
+  document.getElementById('loginErr').style.display = 'none';
+}
+
+// ── NAVIGATION ────────────────────────────────────────
+function showSection(id) {
+  document.querySelectorAll('.page-section').forEach(s => s.classList.remove('active'));
+  const sec = document.getElementById('sec-' + id);
+  if (sec) sec.classList.add('active');
+
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  const nav = document.querySelector(`.nav-item[data-section="${id}"]`);
+  if (nav) nav.classList.add('active');
+
+  if (id === 'dashboard') renderDashboard();
+  if (id === 'employees') renderEmployees();
+  if (id === 'schedule') renderAllSchedules();
+  if (id === 'users') renderUsers();
+  if (id === 'reports') renderReport();
+}
+
+function buildSidebar(role) {
+  const nav = document.getElementById('sidebarNav');
+  let html = '';
+  html += `<div class="nav-item active" data-section="dashboard" onclick="showSection('dashboard')">📊 Dashboard</div>`;
+
+  if (role === 'manager') {
+    html += `<div class="nav-item" data-section="employees" onclick="showSection('employees')">👥 Employees</div>`;
+    html += `<div class="nav-item" data-section="schedule" onclick="showSection('schedule')">📅 Work Schedule</div>`;
+    html += `<div class="nav-item" data-section="reports" onclick="showSection('reports')">📈 Reports</div>`;
+    html += `<div class="nav-item" data-section="users" onclick="showSection('users')">🔐 User Management</div>`;
+  } else {
+    // Rank & File can also see their reports
+    html += `<div class="nav-item" data-section="reports" onclick="showSection('reports')">📈 My Attendance</div>`;
+  }
+  nav.innerHTML = html;
+}
+
+// ── HELPERS ───────────────────────────────────────────
+function getToday() {
+  const d = new Date();
+  return d.toISOString().slice(0,10); // YYYY-MM-DD
+}
+function getNowTime() {
+  return new Date().toLocaleTimeString('en-PH', {hour12: false, hour:'2-digit', minute:'2-digit', second:'2-digit'});
+}
+function formatDateDisplay(iso) {
+  if (!iso) return '—';
+  const [y,m,d] = iso.split('-');
+  return `${m}/${d}/${y}`;
+}
+
+// ── CLOCK IN / CLOCK OUT ──────────────────────────────
+function getTodayLogForUser() {
+  const logs = load('yvp_logs', []);
+  const today = getToday();
+  return logs.find(l => l.yvpId === (CU.yvpId || CU.username) && l.date === today);
+}
+
+function renderClockCard() {
+  if (!CU) return;
+  const log = getTodayLogForUser();
+  const statusEl = document.getElementById('clockStatus');
+  const timesEl = document.getElementById('clockTimes');
+  const btnIn = document.getElementById('btnClockIn');
+  const btnOut = document.getElementById('btnClockOut');
+
+  btnIn.style.display = 'none';
+  btnOut.style.display = 'none';
+
+  // Check last completed log (for 8-hour cooldown)
+  const logs = load('yvp_logs', []);
+  const yvpId = CU.yvpId || CU.username;
+  const completedLogs = logs.filter(l => l.yvpId === yvpId && l.timeIn && l.timeOut)
+                            .sort((a,b) => (b.date + b.timeOut).localeCompare(a.date + a.timeOut));
+  const lastCompleted = completedLogs[0];
+
+  let canClockIn = true;
+  let cooldownMsg = '';
+
+  if (lastCompleted) {
+    try {
+      const outDateStr = lastCompleted.date + 'T' + lastCompleted.timeOut;
+      const outTime = new Date(outDateStr);
+      const now = new Date();
+      const hoursSinceOut = (now - outTime) / (1000 * 60 * 60);
+
+      if (hoursSinceOut < 8) {
+        canClockIn = false;
+        const remaining = (8 - hoursSinceOut).toFixed(1);
+        cooldownMsg = `Next Clock In available in approximately <b>${remaining} hour(s)</b> (8-hour gap required after last Clock Out).`;
+      }
+    } catch(e) {}
+  }
+
+  if (!log || !log.timeIn) {
+    if (canClockIn) {
+      statusEl.innerHTML = `<span style="color:#e65100;font-weight:600">You have not clocked in yet.</span>`;
+      timesEl.innerHTML = '';
+      btnIn.style.display = 'inline-block';
+    } else {
+      statusEl.innerHTML = `<span style="color:#c62828;font-weight:600">Clock In is temporarily locked.</span>`;
+      timesEl.innerHTML = cooldownMsg;
+    }
+  } else if (log.timeIn && !log.timeOut) {
+    statusEl.innerHTML = `<span style="color:#2e7d32;font-weight:600">You are currently CLOCKED IN</span>`;
+    timesEl.innerHTML = `Time In: <b>${log.timeIn}</b>`;
+    btnOut.style.display = 'inline-block';
+  } else {
+    // Already completed today
+    statusEl.innerHTML = `<span style="color:#1a237e;font-weight:600">You have completed your shift today.</span>`;
+    timesEl.innerHTML = `Time In: <b>${log.timeIn}</b> &nbsp;|&nbsp; Time Out: <b>${log.timeOut}</b> &nbsp;|&nbsp; Hours: <b>${log.totalHours || '—'}</b>`;
+    if (!canClockIn && cooldownMsg) {
+      timesEl.innerHTML += `<br><span style="color:#c62828;font-size:13px">${cooldownMsg}</span>`;
+    }
+  }
+}
+
+function clockIn() {
+  if (!CU) return;
+  let logs = load('yvp_logs', []);
+  const today = getToday();
+  const yvpId = CU.yvpId || CU.username;
+
+  // Prevent double clock-in
+  if (logs.find(l => l.yvpId === yvpId && l.date === today && l.timeIn)) {
+    showToast('You already clocked in today', 'error');
+    return;
+  }
+
+  const timeIn = getNowTime();
+  logs.push({
+    yvpId: yvpId,
+    name: CU.name || CU.username,
+    date: today,
+    timeIn: timeIn,
+    timeOut: null,
+    totalHours: null
+  });
+  save('yvp_logs', logs);
+
+  showInfoModal('SUCCESSFULLY LOGGED IN', `Time In recorded at ${timeIn}`, '✅');
+  renderClockCard();
+  renderDashboard();
+}
+
+function clockOut() {
+  if (!CU) return;
+  let logs = load('yvp_logs', []);
+  const today = getToday();
+  const yvpId = CU.yvpId || CU.username;
+
+  const idx = logs.findIndex(l => l.yvpId === yvpId && l.date === today && l.timeIn && !l.timeOut);
+  if (idx === -1) {
+    showToast('No active clock-in found', 'error');
+    return;
+  }
+
+  const timeOut = getNowTime();
+  logs[idx].timeOut = timeOut;
+
+  // Calculate hours (maximum of 6 hours only)
+  try {
+    const [h1,m1,s1] = logs[idx].timeIn.split(':').map(Number);
+    const [h2,m2,s2] = timeOut.split(':').map(Number);
+    let diff = (h2*3600 + m2*60 + s2) - (h1*3600 + m1*60 + s1);
+    if (diff < 0) diff += 24*3600; // overnight shift support
+    let hours = diff / 3600;
+    // Cap at maximum 6 paid hours
+    if (hours > 6) hours = 6;
+    logs[idx].totalHours = hours.toFixed(2);
+  } catch(e) {
+    logs[idx].totalHours = '—';
+  }
+
+  save('yvp_logs', logs);
+  showInfoModal('SUCCESSFULLY LOGGED OUT', `Time Out recorded at ${timeOut}`, '🚪');
+  renderClockCard();
+  renderDashboard();
+}
+
+// ── DASHBOARD ─────────────────────────────────────────
+function renderDashboard() {
+  renderClockCard();
+  renderMySchedule();
+
+
+  // Manager sees everyone
+  const isManager = CU && CU.role === 'manager';
+  document.getElementById('todayAttendanceCard').style.display = isManager ? 'block' : 'none';
+
+  if (isManager) {
+    const logs = load('yvp_logs', []);
+    const today = getToday();
+    const todayLogs = logs.filter(l => l.date === today);
+
+    const present = todayLogs.filter(l => l.timeIn).length;
+    const stillIn = todayLogs.filter(l => l.timeIn && !l.timeOut).length;
+    const completed = todayLogs.filter(l => l.timeIn && l.timeOut).length;
+
+    document.getElementById('dashStats').innerHTML = `
+      <div class="stat-card green"><div class="stat-label">Present Today</div><div class="stat-value">${present}</div></div>
+      <div class="stat-card orange"><div class="stat-label">Still In</div><div class="stat-value">${stillIn}</div></div>
+      <div class="stat-card"><div class="stat-label">Completed</div><div class="stat-value">${completed}</div></div>
+    `;
+
+    const tbody = document.getElementById('todayTbody');
+    if (todayLogs.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:#999">No attendance records today</td></tr>`;
+    } else {
+      tbody.innerHTML = todayLogs.map((l, idx) => `
+        <tr>
+          <td>${l.yvpId}</td>
+          <td>${l.name}</td>
+          <td>${l.timeIn || '—'}</td>
+          <td>${l.timeOut || '—'}</td>
+          <td>${l.totalHours || '—'}</td>
+          <td><span class="badge ${l.timeOut ? 'badge-success' : 'badge-warning'}">${l.timeOut ? 'Completed' : 'In Progress'}</span></td>
+          <td>
+            <button class="btn btn-sm btn-danger" onclick="deleteAttendanceLog('${l.yvpId}', '${l.date}')">Delete</button>
+          </td>
+        </tr>
+      `).join('');
+    }
+  }
+}
+
+function renderMySchedule() {
+  const schedules = load('yvp_schedules', []);
+  const yvpId = CU ? (CU.yvpId || CU.username) : '';
+  const mySched = schedules.filter(s => s.yvpId === yvpId)
+                          .sort((a,b) => ((a.fromDate||a.date)||'').localeCompare((b.fromDate||b.date)||''));
+
+  const tbody = document.getElementById('myScheduleTbody');
+  if (mySched.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="3" style="text-align:center;color:#999">No schedule assigned yet</td></tr>`;
+  } else {
+    tbody.innerHTML = mySched.map(s => `
+      <tr>
+        <td>${s.fromDisplay || s.dateDisplay || s.date || '—'}</td>
+        <td>${s.toDisplay || s.fromDisplay || s.dateDisplay || '—'}</td>
+        <td>${s.schedule}</td>
+      </tr>
+    `).join('');
+  }
+}
+
+// ── EMPLOYEES ─────────────────────────────────────────
+function renderEmployees() {
+  const emps = load('yvp_employees', []);
+  const q = (document.getElementById('empSearch')?.value || '').toLowerCase();
+  const filtered = emps.filter(e => 
+    (e.yvpId||'').toLowerCase().includes(q) || 
+    (e.lastName||'').toLowerCase().includes(q) || 
+    (e.firstName||'').toLowerCase().includes(q)
+  );
+
+  const tbody = document.getElementById('empTbody');
+  if (filtered.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;color:#999">No employees found</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = filtered.map(e => `
+    <tr>
+      <td>${e.yvpId}</td>
+      <td>${e.lastName}</td>
+      <td>${e.firstName}</td>
+      <td>${e.middleName || ''}</td>
+      <td>${e.position || ''}</td>
+      <td>${e.address || ''}</td>
+      <td>${e.birthday || ''}</td>
+      <td>${e.email || ''}</td>
+      <td>${e.contact || ''}</td>
+      <td>
+        <button class="btn btn-sm btn-primary" onclick="editEmployee('${e.yvpId}')">Edit</button>
+        <button class="btn btn-sm btn-secondary" onclick="createRankFileUser('${e.yvpId}')">Create Login</button>
+        <button class="btn btn-sm btn-danger" onclick="deleteEmployee('${e.yvpId}')">Delete</button>
+      </td>
+    </tr>
+  `).join('');
+}
+
+function showEmpForm() {
+  document.getElementById('empForm').style.display = 'block';
+  document.getElementById('empFormTitle').textContent = '➕ Add Employee';
+  ['fId','fLast','fFirst','fMid','fPosition','fBday','fContact','fEmail','fAddr','fEditId'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+}
+
+function saveEmployee() {
+  const yvpId = document.getElementById('fId').value.trim();
+  const lastName = document.getElementById('fLast').value.trim();
+  const firstName = document.getElementById('fFirst').value.trim();
+  if (!yvpId || !lastName || !firstName) {
+    showToast('YVP ID, Last Name and First Name are required', 'error');
+    return;
+  }
+
+  let emps = load('yvp_employees', []);
+  const editId = document.getElementById('fEditId').value;
+  const emp = {
+    yvpId, lastName, firstName,
+    middleName: document.getElementById('fMid').value.trim(),
+    position: document.getElementById('fPosition').value.trim(),
+    birthday: document.getElementById('fBday').value,
+    contact: document.getElementById('fContact').value.trim(),
+    email: document.getElementById('fEmail').value.trim(),
+    address: document.getElementById('fAddr').value.trim()
+  };
+
+  if (editId) {
+    emps = emps.map(e => e.yvpId === editId ? emp : e);
+  } else {
+    if (emps.find(e => e.yvpId === yvpId)) {
+      showToast('YVP ID already exists', 'error');
+      return;
+    }
+    emps.push(emp);
+  }
+  save('yvp_employees', emps);
+  document.getElementById('empForm').style.display = 'none';
+  renderEmployees();
+  showToast('Employee saved successfully');
+}
+
+function editEmployee(id) {
+  const emp = load('yvp_employees', []).find(e => e.yvpId === id);
+  if (!emp) return;
+  document.getElementById('empForm').style.display = 'block';
+  document.getElementById('empFormTitle').textContent = '✏️ Edit Employee';
+  document.getElementById('fId').value = emp.yvpId;
+  document.getElementById('fLast').value = emp.lastName;
+  document.getElementById('fFirst').value = emp.firstName;
+  document.getElementById('fMid').value = emp.middleName || '';
+  document.getElementById('fPosition').value = emp.position || '';
+  document.getElementById('fBday').value = emp.birthday || '';
+  document.getElementById('fContact').value = emp.contact || '';
+  document.getElementById('fEmail').value = emp.email || '';
+  document.getElementById('fAddr').value = emp.address || '';
+  document.getElementById('fEditId').value = emp.yvpId;
+}
+
+function deleteEmployee(id) {
+  if (!confirm('Delete this employee?')) return;
+  let emps = load('yvp_employees', []).filter(e => e.yvpId !== id);
+  save('yvp_employees', emps);
+  renderEmployees();
+  showToast('Employee deleted');
+}
+
+// Bulk upload employees (already existed, keep)
+function downloadEmpTemplate() {
+  const headers = ["YVP ID", "Last Name", "First Name", "Middle Name", "Position", "Birthday", "Address", "Email Address", "Contact Number"];
+  const sample = ["YVP-0001", "Dela Cruz", "Juan", "Santos", "Staff", "1995-06-15", "123 Main St, City", "juan.delacruz@email.com", "09171234567"];
+  const ws = XLSX.utils.aoa_to_sheet([headers, sample]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "New Hires");
+  XLSX.writeFile(wb, "YVP_New_Hires_Template.xlsx");
+  showToast("Template downloaded");
+}
+
+function handleEmpUpload(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const status = document.getElementById("uploadStatus");
+  status.textContent = "Reading file...";
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      const data = new Uint8Array(e.target.result);
+      const workbook = XLSX.read(data, { type: "array" });
+      const rows = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { defval: "" });
+      if (rows.length === 0) { showToast("Excel file is empty", "error"); status.textContent=""; return; }
+
+      let employees = load("yvp_employees", []);
+      let added = 0, skipped = 0;
+
+      rows.forEach((row, idx) => {
+        const get = (...keys) => {
+          for (const k of keys) {
+            if (row[k] !== undefined && String(row[k]).trim() !== "") return String(row[k]).trim();
+          }
+          return "";
+        };
+        const yvpId = get("YVP ID", "YVPID", "ID");
+        const lastName = get("Last Name", "Lastname", "Surname");
+        const firstName = get("First Name", "Firstname");
+        if (!yvpId || !lastName || !firstName) { skipped++; return; }
+        if (employees.find(e => e.yvpId.toUpperCase() === yvpId.toUpperCase())) { skipped++; return; }
+
+        employees.push({
+          yvpId, lastName, firstName,
+          middleName: get("Middle Name", "Middlename"),
+          position: get("Position", "Job Title", "Title"),
+          birthday: get("Birthday", "Birthdate", "DOB"),
+          address: get("Address"),
+          email: get("Email Address", "Email"),
+          contact: get("Contact Number", "Contact", "Phone")
+        });
+        added++;
+      });
+      save("yvp_employees", employees);
+      renderEmployees();
+      const msg = `✅ ${added} new hire(s) added` + (skipped ? ` | ${skipped} skipped` : '');
+      showToast(msg);
+      status.textContent = msg;
+    } catch (err) {
+      showToast("Failed to read Excel file", "error");
+      status.textContent = "Error";
+    }
+    event.target.value = "";
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+// ── WORK SCHEDULE ─────────────────────────────────────
+function downloadSchedTemplate() {
+  const headers = ["YVP ID", "From Date", "To Date", "Schedule"];
+  const sample = ["YVP-0001", "09/01/2026", "09/07/2026", "9PM - 6AM"];
+  const ws = XLSX.utils.aoa_to_sheet([headers, sample]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Schedules");
+  XLSX.writeFile(wb, "YVP_Work_Schedule_Template.xlsx");
+  showToast("Schedule template downloaded");
+}
+
+function parseDateFlex(dateRaw) {
+  if (!dateRaw) return { display: '', iso: '' };
+  let dateDisplay = dateRaw;
+  let dateISO = dateRaw;
+  if (String(dateRaw).includes('/')) {
+    const parts = String(dateRaw).split('/');
+    if (parts.length === 3) {
+      const [a,b,c] = parts;
+      dateDisplay = `${a.padStart(2,'0')}/${b.padStart(2,'0')}/${c}`;
+      dateISO = `${c}-${a.padStart(2,'0')}-${b.padStart(2,'0')}`;
+    }
+  }
+  return { display: dateDisplay, iso: dateISO };
+}
+
+function handleSchedUpload(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const status = document.getElementById("schedUploadStatus");
+  status.textContent = "Reading file...";
+
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      const data = new Uint8Array(e.target.result);
+      const workbook = XLSX.read(data, { type: "array" });
+      const rows = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { defval: "" });
+
+      let schedules = load("yvp_schedules", []);
+      let added = 0, skipped = 0;
+
+      rows.forEach(row => {
+        const get = (...keys) => {
+          for (const k of keys) {
+            if (row[k] !== undefined && String(row[k]).trim() !== "") return String(row[k]).trim();
+          }
+          return "";
+        };
+        const yvpId = get("YVP ID", "YVPID", "ID");
+        const fromRaw = get("From Date", "From", "Date From", "Start Date", "Date Schedule", "Date");
+        const toRaw = get("To Date", "To", "Date To", "End Date");
+        const schedule = get("Schedule", "Shift", "Work Schedule");
+
+        if (!yvpId || !fromRaw || !schedule) { skipped++; return; }
+
+        const from = parseDateFlex(fromRaw);
+        const to = toRaw ? parseDateFlex(toRaw) : from;
+
+        // Avoid exact duplicates
+        if (schedules.find(s => s.yvpId === yvpId && s.fromDate === from.iso && s.toDate === to.iso && s.schedule === schedule)) {
+          skipped++;
+          return;
+        }
+
+        schedules.push({
+          yvpId,
+          fromDate: from.iso,
+          fromDisplay: from.display,
+          toDate: to.iso,
+          toDisplay: to.display,
+          // keep old fields for compatibility
+          date: from.iso,
+          dateDisplay: from.display,
+          schedule
+        });
+        added++;
+      });
+
+      save("yvp_schedules", schedules);
+      renderAllSchedules();
+      const msg = `✅ ${added} schedule(s) added` + (skipped ? ` | ${skipped} skipped` : '');
+      showToast(msg);
+      status.textContent = msg;
+    } catch(err) {
+      console.error(err);
+      showToast("Failed to read schedule file", "error");
+      status.textContent = "Error";
+    }
+    event.target.value = "";
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function renderAllSchedules() {
+  const schedules = load('yvp_schedules', []);
+  const emps = load('yvp_employees', []);
+  const q = (document.getElementById('schedSearch')?.value || '').toLowerCase();
+
+  const filtered = schedules.filter(s => {
+    const name = (emps.find(e => e.yvpId === s.yvpId) || {});
+    const fullName = `${name.lastName||''} ${name.firstName||''}`.toLowerCase();
+    return (s.yvpId||'').toLowerCase().includes(q) ||
+           (s.fromDisplay||s.dateDisplay||'').includes(q) ||
+           (s.toDisplay||'').includes(q) ||
+           fullName.includes(q);
+  }).sort((a,b) => ((b.fromDate||b.date)||'').localeCompare((a.fromDate||a.date)||''));
+
+  const tbody = document.getElementById('schedTbody');
+  if (filtered.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:#999">No schedules found</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = filtered.map((s) => {
+    const emp = emps.find(e => e.yvpId === s.yvpId);
+    const name = emp ? `${emp.lastName}, ${emp.firstName}` : '—';
+    const fromD = s.fromDisplay || s.dateDisplay || s.date || '—';
+    const toD = s.toDisplay || s.fromDisplay || s.dateDisplay || '—';
+    const keyDate = s.fromDate || s.date;
+    return `<tr>
+      <td>${s.yvpId}</td>
+      <td>${name}</td>
+      <td>${fromD}</td>
+      <td>${toD}</td>
+      <td>${s.schedule}</td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-sm btn-primary" onclick="showEditSchedule('${s.yvpId}', '${keyDate}')">Edit</button>
+        <button class="btn btn-sm btn-danger" onclick="deleteSchedule('${s.yvpId}', '${keyDate}')">Delete</button>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+function deleteSchedule(yvpId, date) {
+  if (!confirm('Delete this schedule?')) return;
+  let schedules = load('yvp_schedules', []);
+  schedules = schedules.filter(s => !(s.yvpId === yvpId && s.date === date));
+  save('yvp_schedules', schedules);
+  renderAllSchedules();
+  showToast('Schedule deleted');
+}
+
+// ── USER MANAGEMENT ───────────────────────────────────
+function renderUsers() {
+  const users = load('yvp_users', []);
+  const tbody = document.getElementById('usersTbody');
+  tbody.innerHTML = users.map(u => `
+    <tr>
+      <td>${u.yvpId || '—'}</td>
+      <td>${u.name || '—'}</td>
+      <td>${u.username}</td>
+      <td><span class="badge ${u.role==='manager' ? 'badge-info' : 'badge-secondary'}">${u.role === 'manager' ? 'Manager' : 'Rank & File'}</span></td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-sm btn-warning" onclick="showResetPassword('${u.username}')">Reset Password</button>
+        ${u.username !== 'admin' ? `<button class="btn btn-sm btn-danger" onclick="deleteUser('${u.username}')">Delete</button>` : ''}
+      </td>
+    </tr>
+  `).join('');
+}
+
+function showAddManagerForm() {
+  document.getElementById('addManagerForm').style.display = 'block';
+  document.getElementById('mgrYvpId').value = '';
+}
+
+function saveManagerUser() {
+  const yvpId = document.getElementById('mgrYvpId').value.trim();
+
+  if (!yvpId) {
+    showToast('Please enter a YVP ID', 'error');
+    return;
+  }
+
+  // Find employee
+  const employees = load('yvp_employees', []);
+  const emp = employees.find(e => e.yvpId.toUpperCase() === yvpId.toUpperCase());
+
+  if (!emp) {
+    showToast('YVP ID not found in employee records. Please add the employee first.', 'error');
+    return;
+  }
+
+  let users = load('yvp_users', []);
+
+  // Check if this YVP ID already has an account
+  if (users.find(u => (u.yvpId || '').toUpperCase() === yvpId.toUpperCase())) {
+    showToast('This employee already has a user account', 'error');
+    return;
+  }
+
+  // Create manager account
+  // Username = YVP ID (lowercase), Password = YVP ID (default, can be changed later)
+  const username = yvpId.toLowerCase().replace(/\s+/g, '');
+  const fullName = `${emp.firstName} ${emp.lastName}`.trim();
+
+  if (users.find(u => u.username === username)) {
+    showToast('Username already exists', 'error');
+    return;
+  }
+
+  users.push({
+    username: username,
+    password: yvpId,          // default password = YVP ID
+    role: 'manager',
+    yvpId: emp.yvpId,
+    name: fullName
+  });
+
+  save('yvp_users', users);
+  document.getElementById('addManagerForm').style.display = 'none';
+  renderUsers();
+  showToast(`Manager account created for ${fullName}. Username: ${username} | Password: ${yvpId}`);
+}
+
+function deleteUser(username) {
+  if (username === 'admin') {
+    showToast('Cannot delete the main admin account', 'error');
+    return;
+  }
+  if (!confirm('Delete this user account?')) return;
+  let users = load('yvp_users', []).filter(u => u.username !== username);
+  save('yvp_users', users);
+  renderUsers();
+  showToast('User deleted');
+}
+
+// ── REPORTS ───────────────────────────────────────────
+function renderReport() {
+  let logs = load('yvp_logs', []);
+  // Rank & File only sees their own
+  if (CU && CU.role !== 'manager') {
+    const myId = CU.yvpId || CU.username;
+    logs = logs.filter(l => l.yvpId === myId);
+  }
+
+  logs = logs.slice().sort((a,b) => (b.date + b.timeIn).localeCompare(a.date + a.timeIn));
+
+  const tbody = document.getElementById('rptTbody');
+  if (logs.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;color:#999">No attendance records found</td></tr>`;
+    return;
+  }
+
+  const isManager = CU && CU.role === 'manager';
+  tbody.innerHTML = logs.map(l => `
+    <tr>
+      <td>${l.yvpId}</td>
+      <td>${l.name}</td>
+      <td>${formatDateDisplay(l.date)}</td>
+      <td>${l.timeIn || '—'}</td>
+      <td>${l.timeOut || '—'}</td>
+      <td>${l.totalHours || '—'}</td>
+      <td><span class="badge ${l.timeOut ? 'badge-success' : 'badge-warning'}">${l.timeOut ? 'Completed' : 'In Progress'}</span></td>
+      ${isManager ? `<td><button class="btn btn-sm btn-danger" onclick="deleteAttendanceLog('${l.yvpId}', '${l.date}')">Delete</button></td>` : '<td>—</td>'}
+    </tr>
+  `).join('');
+}
+
+
+// ── EXPORT ATTENDANCE REPORT ──────────────────────────
+function exportAttendanceReport() {
+  let logs = load('yvp_logs', []);
+
+  // Rank & File only their own records
+  if (CU && CU.role !== 'manager') {
+    const myId = CU.yvpId || CU.username;
+    logs = logs.filter(l => l.yvpId === myId);
+  }
+
+  if (logs.length === 0) {
+    showToast('No records to export', 'error');
+    return;
+  }
+
+  // Sort newest first
+  logs = logs.slice().sort((a,b) => (b.date + (b.timeIn||'')).localeCompare(a.date + (a.timeIn||'')));
+
+  // Prepare data for Excel
+  const headers = ["YVP ID", "Name", "Date", "Time In", "Time Out", "Total Hours", "Status"];
+  const rows = logs.map(l => [
+    l.yvpId || '',
+    l.name || '',
+    formatDateDisplay(l.date),
+    l.timeIn || '',
+    l.timeOut || '',
+    l.totalHours || '',
+    l.timeOut ? 'Completed' : 'In Progress'
+  ]);
+
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+
+  // Set column widths
+  ws['!cols'] = [
+    {wch: 12}, {wch: 22}, {wch: 12}, {wch: 12},
+    {wch: 12}, {wch: 12}, {wch: 14}
+  ];
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Attendance Report");
+
+  const today = getToday().replace(/-/g, '');
+  const filename = CU && CU.role === 'manager'
+    ? `YVP_Attendance_Report_All_${today}.xlsx`
+    : `YVP_My_Attendance_${today}.xlsx`;
+
+  XLSX.writeFile(wb, filename);
+  showToast('Attendance report downloaded successfully');
+}
+
+
+
+// ── DELETE ATTENDANCE LOG (Manager only) ──────────────
+function deleteAttendanceLog(yvpId, date) {
+  if (!CU || CU.role !== 'manager') {
+    showToast('Only managers can delete attendance records', 'error');
+    return;
+  }
+  if (!confirm(`Delete attendance record for ${yvpId} on ${formatDateDisplay(date)}?`)) return;
+
+  let logs = load('yvp_logs', []);
+  const before = logs.length;
+  logs = logs.filter(l => !(l.yvpId === yvpId && l.date === date));
+  save('yvp_logs', logs);
+
+  showToast('Attendance record deleted');
+  renderDashboard();
+  renderReport();
+}
+
+
+
+// ── CREATE RANK & FILE LOGIN FOR EMPLOYEE ─────────────
+function createRankFileUser(yvpId) {
+  const employees = load('yvp_employees', []);
+  const emp = employees.find(e => e.yvpId === yvpId);
+  if (!emp) {
+    showToast('Employee not found', 'error');
+    return;
+  }
+
+  let users = load('yvp_users', []);
+  if (users.find(u => (u.yvpId || '').toUpperCase() === yvpId.toUpperCase())) {
+    showToast('This employee already has a login account', 'error');
+    return;
+  }
+
+  const username = yvpId.toLowerCase().replace(/\s+/g, '');
+  const fullName = `${emp.firstName} ${emp.lastName}`.trim();
+
+  if (users.find(u => u.username === username)) {
+    showToast('Username already exists', 'error');
+    return;
+  }
+
+  users.push({
+    username: username,
+    password: yvpId,           // default password = YVP ID
+    role: 'rank_file',
+    yvpId: emp.yvpId,
+    name: fullName
+  });
+
+  save('yvp_users', users);
+  showToast(`Rank & File login created for ${fullName}. Username: ${username} | Password: ${yvpId}`);
+}
+
+// Create login accounts for ALL employees who don't have one yet
+function createAllRankFileLogins() {
+  const employees = load('yvp_employees', []);
+  let users = load('yvp_users', []);
+  let created = 0;
+  let skipped = 0;
+
+  employees.forEach(emp => {
+    if (users.find(u => (u.yvpId || '').toUpperCase() === emp.yvpId.toUpperCase())) {
+      skipped++;
+      return;
+    }
+    const username = emp.yvpId.toLowerCase().replace(/\s+/g, '');
+    if (users.find(u => u.username === username)) {
+      skipped++;
+      return;
+    }
+    const fullName = `${emp.firstName} ${emp.lastName}`.trim();
+    users.push({
+      username: username,
+      password: emp.yvpId,
+      role: 'rank_file',
+      yvpId: emp.yvpId,
+      name: fullName
+    });
+    created++;
+  });
+
+  save('yvp_users', users);
+  showToast(`Created ${created} Rank & File login(s). ${skipped} already had accounts.`);
+  if (document.getElementById('usersTbody')) renderUsers();
+}
+
+
+
+// ── RESET PASSWORD ────────────────────────────────────
+function showResetPassword(username) {
+  const users = load('yvp_users', []);
+  const user = users.find(u => u.username === username);
+  if (!user) {
+    showToast('User not found', 'error');
+    return;
+  }
+  document.getElementById('resetUsername').value = username;
+  document.getElementById('resetUserDisplay').value = `${user.name || user.username} (${user.username})`;
+  document.getElementById('resetNewPassword').value = '';
+  document.getElementById('resetConfirmPassword').value = '';
+  document.getElementById('resetPassModal').classList.add('active');
+}
+
+function saveResetPassword() {
+  const username = document.getElementById('resetUsername').value;
+  const newPass = document.getElementById('resetNewPassword').value;
+  const confirmPass = document.getElementById('resetConfirmPassword').value;
+
+  if (!newPass || !confirmPass) {
+    showToast('Please enter and confirm the new password', 'error');
+    return;
+  }
+  if (newPass !== confirmPass) {
+    showToast('Passwords do not match', 'error');
+    return;
+  }
+  if (newPass.length < 4) {
+    showToast('Password must be at least 4 characters', 'error');
+    return;
+  }
+
+  let users = load('yvp_users', []);
+  const idx = users.findIndex(u => u.username === username);
+  if (idx === -1) {
+    showToast('User not found', 'error');
+    return;
+  }
+
+  users[idx].password = newPass;
+  save('yvp_users', users);
+
+  closeModal('resetPassModal');
+  showToast(`Password reset successfully for ${username}`);
+  renderUsers();
+}
+
+
+
+// ── EDIT SCHEDULE ─────────────────────────────────────
+function showEditSchedule(yvpId, date) {
+  const schedules = load('yvp_schedules', []);
+  const sched = schedules.find(s => s.yvpId === yvpId && (s.fromDate === date || s.date === date));
+  if (!sched) {
+    showToast('Schedule not found', 'error');
+    return;
+  }
+
+  const emps = load('yvp_employees', []);
+  const emp = emps.find(e => e.yvpId === yvpId);
+  const name = emp ? `${emp.lastName}, ${emp.firstName}` : '—';
+
+  document.getElementById('editSchedOldYvpId').value = yvpId;
+  document.getElementById('editSchedOldDate').value = date;
+  document.getElementById('editSchedYvpId').value = yvpId;
+  document.getElementById('editSchedEmpName').value = name;
+  document.getElementById('editSchedFrom').value = sched.fromDisplay || sched.dateDisplay || sched.date || '';
+  document.getElementById('editSchedTo').value = sched.toDisplay || sched.fromDisplay || sched.dateDisplay || '';
+  document.getElementById('editSchedShift').value = sched.schedule || '';
+
+  document.getElementById('editSchedModal').classList.add('active');
+}
+
+function saveEditSchedule() {
+  const oldYvpId = document.getElementById('editSchedOldYvpId').value;
+  const oldDate = document.getElementById('editSchedOldDate').value;
+  const fromRaw = document.getElementById('editSchedFrom').value.trim();
+  const toRaw = document.getElementById('editSchedTo').value.trim();
+  const schedule = document.getElementById('editSchedShift').value.trim();
+
+  if (!fromRaw || !toRaw || !schedule) {
+    showToast('From Date, To Date and Schedule are required', 'error');
+    return;
+  }
+
+  const from = parseDateFlex(fromRaw);
+  const to = parseDateFlex(toRaw);
+
+  let schedules = load('yvp_schedules', []);
+  const idx = schedules.findIndex(s => s.yvpId === oldYvpId && (s.fromDate === oldDate || s.date === oldDate));
+  if (idx === -1) {
+    showToast('Original schedule not found', 'error');
+    return;
+  }
+
+  schedules[idx] = {
+    yvpId: oldYvpId,
+    fromDate: from.iso,
+    fromDisplay: from.display,
+    toDate: to.iso,
+    toDisplay: to.display,
+    date: from.iso,
+    dateDisplay: from.display,
+    schedule: schedule
+  };
+
+  save('yvp_schedules', schedules);
+  closeModal('editSchedModal');
+  renderAllSchedules();
+  showToast('Schedule updated successfully');
+}
+
+
+
+// ── EXPORT WORK SCHEDULES ─────────────────────────────
+function exportWorkSchedules() {
+  const schedules = load('yvp_schedules', []);
+  const emps = load('yvp_employees', []);
+  if (schedules.length === 0) {
+    showToast('No schedules to export', 'error');
+    return;
+  }
+
+  const headers = ["YVP ID", "Employee Name", "From Date", "To Date", "Schedule"];
+  const rows = schedules.map(s => {
+    const emp = emps.find(e => e.yvpId === s.yvpId);
+    const name = emp ? `${emp.lastName}, ${emp.firstName}` : '';
+    return [
+      s.yvpId,
+      name,
+      s.fromDisplay || s.dateDisplay || s.date || '',
+      s.toDisplay || s.fromDisplay || s.dateDisplay || '',
+      s.schedule || ''
+    ];
+  });
+
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+  ws['!cols'] = [{wch:12},{wch:22},{wch:14},{wch:14},{wch:16}];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Work Schedules");
+  XLSX.writeFile(wb, `YVP_Work_Schedules_${getToday().replace(/-/g,'')}.xlsx`);
+  showToast('Work schedules exported successfully');
+}
+
+// ── PROFILE PICTURE ───────────────────────────────────
+function getProfilePic(yvpId) {
+  const pics = load('yvp_profile_pics', {});
+  return pics[yvpId] || null;
+}
+
+function saveProfilePic(yvpId, dataUrl) {
+  const pics = load('yvp_profile_pics', {});
+  pics[yvpId] = dataUrl;
+  save('yvp_profile_pics', pics);
+}
+
+function updateSidebarAvatar() {
+  if (!CU) return;
+  const yvpId = CU.yvpId || CU.username;
+  const pic = getProfilePic(yvpId);
+  const avatar = document.getElementById('sbAvatar');
+  if (pic) {
+    avatar.style.backgroundImage = `url(${pic})`;
+    avatar.style.backgroundSize = 'cover';
+    avatar.style.backgroundPosition = 'center';
+    avatar.textContent = '';
+  } else {
+    avatar.style.backgroundImage = '';
+    avatar.textContent = (CU.name || CU.username).charAt(0).toUpperCase();
+  }
+}
+
+function handleProfilePicUpload(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  if (!file.type.startsWith('image/')) {
+    showToast('Please select an image file', 'error');
+    return;
+  }
+  if (file.size > 2 * 1024 * 1024) {
+    showToast('Image must be less than 2MB', 'error');
+    return;
+  }
+
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    const yvpId = CU.yvpId || CU.username;
+    saveProfilePic(yvpId, e.target.result);
+    updateSidebarAvatar();
+    showToast('Profile picture updated');
+  };
+  reader.readAsDataURL(file);
+  event.target.value = '';
+}
+
+function getEmployeePosition(yvpId) {
+  const emps = load('yvp_employees', []);
+  const emp = emps.find(e => e.yvpId === yvpId);
+  return emp && emp.position ? emp.position : null;
+}
+
+
+console.log('YVP Timekeeping System loaded. Default login: admin / admin123');
+
+</script>
+</body>
+</html>
