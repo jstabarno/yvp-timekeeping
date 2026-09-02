@@ -71,31 +71,9 @@ async function createLoginForEmployee(yvpId) {
 
 
 // ── EDIT USER ACCESS ──────────────────────────────────
-function editUserAccess(uid, username, currentRole) {
-  document.getElementById('editAccessUid').value = uid;
-  document.getElementById('editAccessUsername').value = username;
-  document.getElementById('editAccessRole').value = currentRole === 'manager' ? 'manager' : 'rank_file';
-  document.getElementById('editAccessModal').classList.add('active');
-}
 
-async function saveUserAccess() {
-  const uid = document.getElementById('editAccessUid').value;
-  const newRole = document.getElementById('editAccessRole').value;
-  const username = document.getElementById('editAccessUsername').value;
-  if (!uid) { showToast('User not found', 'error'); return; }
-  if (username === 'admin' && newRole !== 'manager') {
-    showToast('Main admin must remain Manager', 'error'); return;
-  }
-  try {
-    await db.collection('users').doc(uid).update({ role: newRole });
-    closeModal('editAccessModal');
-    loadUsers();
-    showToast('User access updated to ' + (newRole === 'manager' ? 'Manager' : 'Rank & File'));
-  } catch (e) {
-    console.error(e);
-    showToast('Failed to update role', 'error');
-  }
-}
+
+
 
 async function deleteUserAccount(uid, username) {
   if (username === 'admin') { showToast('Cannot delete main admin account', 'error'); return; }
@@ -212,6 +190,185 @@ async function saveResetPassword() {
     closeModal('resetPassModal');
     await showResetPasswordForEmployee(yvpId, document.getElementById('resetUserDisplay')?.value || yvpId);
   }
+}
+
+
+// ── EDIT ATTENDANCE (Dashboard) ───────────────────────
+async function editAttendance(yvpId, empName, timeIn, timeOut, logId) {
+  const today = new Date().toISOString().slice(0, 10);
+  const docId = logId || (yvpId + '_' + today);
+
+  document.getElementById('editAttDocId').value = docId;
+  document.getElementById('editAttYvpId').value = yvpId;
+  document.getElementById('editAttDate').value = today;
+  document.getElementById('editAttName').value = empName || yvpId;
+  document.getElementById('editAttDateDisplay').value = today;
+  document.getElementById('editAttTimeIn').value = (timeIn && timeIn !== '—') ? timeIn : '';
+  document.getElementById('editAttTimeOut').value = (timeOut && timeOut !== '—') ? timeOut : '';
+  document.getElementById('editAttModal').classList.add('active');
+}
+
+function parseTimeForHours(timeStr, dateISO) {
+  if (!timeStr) return null;
+  const d = new Date(dateISO + ' ' + timeStr);
+  if (!isNaN(d.getTime())) return d;
+  // try common formats
+  const m = String(timeStr).match(/(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?/i);
+  if (!m) return null;
+  let h = parseInt(m[1], 10);
+  const min = parseInt(m[2], 10);
+  const sec = parseInt(m[3] || '0', 10);
+  const ap = (m[4] || '').toUpperCase();
+  if (ap === 'PM' && h < 12) h += 12;
+  if (ap === 'AM' && h === 12) h = 0;
+  const out = new Date(dateISO + 'T00:00:00');
+  out.setHours(h, min, sec, 0);
+  return out;
+}
+
+async function saveEditAttendance() {
+  const docId = document.getElementById('editAttDocId').value;
+  const yvpId = document.getElementById('editAttYvpId').value;
+  const date = document.getElementById('editAttDate').value;
+  const name = document.getElementById('editAttName').value;
+  const timeIn = document.getElementById('editAttTimeIn').value.trim();
+  const timeOut = document.getElementById('editAttTimeOut').value.trim();
+
+  if (!timeIn) {
+    showToast('Time In is required', 'error');
+    return;
+  }
+
+  let totalHours = null;
+  if (timeIn && timeOut) {
+    const d1 = parseTimeForHours(timeIn, date);
+    let d2 = parseTimeForHours(timeOut, date);
+    if (d1 && d2) {
+      let diff = (d2 - d1) / (1000 * 60 * 60);
+      if (diff < 0) diff += 24; // overnight shift
+      if (diff > 6) diff = 6;   // max 6 hours
+      if (diff < 0) diff = 0;
+      totalHours = diff.toFixed(2);
+    }
+  }
+
+  try {
+    const payload = {
+      yvpId: yvpId,
+      name: name,
+      date: date,
+      timeIn: timeIn,
+      timeOut: timeOut || null,
+      totalHours: totalHours,
+      manuallyEdited: true,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    };
+    await db.collection('attendance').doc(docId).set(payload, { merge: true });
+    closeModal('editAttModal');
+    showToast('Attendance updated — Reports & Payroll will reflect changes');
+    // UI refresh via realtime listener; also force local if needed
+    if (typeof renderDashboard === 'function') renderDashboard();
+    if (document.getElementById('sec-reports')?.classList.contains('active')) loadReports();
+    if (document.getElementById('sec-payroll')?.classList.contains('active')) loadPayroll();
+  } catch (e) {
+    console.error(e);
+    showToast('Failed to update attendance: ' + e.message, 'error');
+  }
+}
+
+async function loadUsers() {
+  const snap = await db.collection("users").get();
+  const users = snap.docs.map(d => ({id: d.id, ...d.data()}));
+  const tbody = document.getElementById("usersTbody");
+  if (!tbody) return;
+  tbody.innerHTML = users.length ? users.map(u => {
+    const role = u.role === 'manager' ? 'manager' : 'rank_file';
+    const roleLabel = role === 'manager' ? 'Manager' : 'Rank & File';
+    const badge = role === 'manager' ? 'badge-info' : 'badge-secondary';
+    const uname = (u.username || '').replace(/'/g, "\'");
+    return `<tr>
+      <td>${u.username || '—'}</td>
+      <td>${u.name || '—'}</td>
+      <td><span class="badge ${badge}">${roleLabel}</span></td>
+      <td>${u.yvpId || '—'}</td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-primary btn-sm" onclick="editUserAccess('${u.id}','${uname}','${role}')">Edit Access</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteUserAccount('${u.id}','${uname}')">Delete</button>
+      </td>
+    </tr>`;
+  }).join('') : `<tr><td colspan="5" style="text-align:center;color:#999">No users found</td></tr>`;
+}
+
+function editUserAccess(uid, username, currentRole) {
+  if (!uid) { showToast('User not found', 'error'); return; }
+  document.getElementById('editAccessUid').value = uid;
+  document.getElementById('editAccessUsername').value = username || '';
+  document.getElementById('editAccessRole').value = currentRole === 'manager' ? 'manager' : 'rank_file';
+  document.getElementById('editAccessModal').classList.add('active');
+}
+
+async function saveUserAccess() {
+  const uid = document.getElementById('editAccessUid').value;
+  const newRole = document.getElementById('editAccessRole').value;
+  const username = document.getElementById('editAccessUsername').value;
+
+  if (!uid) { showToast('User not found', 'error'); return; }
+  if (username === 'admin' && newRole !== 'manager') {
+    showToast('Main admin must remain Manager', 'error');
+    return;
+  }
+
+  try {
+    await db.collection('users').doc(uid).update({
+      role: newRole,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    closeModal('editAccessModal');
+    loadUsers();
+    showToast('Access updated to ' + (newRole === 'manager' ? 'Manager' : 'Rank & File'));
+
+    // If editing current user, refresh sidebar
+    if (CU && (CU.uid === uid || CU.username === username)) {
+      CU.role = newRole;
+      const roleEl = document.getElementById('sbRole');
+      if (roleEl) roleEl.textContent = newRole === 'manager' ? 'Manager' : 'Rank & File';
+      buildSidebar(newRole);
+    }
+  } catch (e) {
+    console.error(e);
+    showToast('Failed to update access: ' + e.message, 'error');
+  }
+}
+
+
+async function updateSidebarPosition() {
+  const posEl = document.getElementById('sbPosition');
+  const nameEl = document.getElementById('sbName');
+  if (!CU) return;
+
+  // Name
+  let displayName = CU.name || CU.username || '—';
+  try {
+    if (CU.yvpId) {
+      // Prefer live employee record for name + position
+      let emp = (typeof cachedEmployees !== 'undefined' ? cachedEmployees : []).find(e => e.yvpId === CU.yvpId);
+      if (!emp) {
+        const doc = await db.collection('employees').doc(CU.yvpId).get();
+        if (doc.exists) emp = doc.data();
+      }
+      if (emp) {
+        const full = [emp.firstName, emp.middleName, emp.lastName].filter(Boolean).join(' ')
+                  || [emp.lastName, emp.firstName, emp.middleName].filter(Boolean).join(' ');
+        if (full) displayName = full;
+        if (nameEl) nameEl.textContent = displayName;
+        if (posEl) posEl.textContent = emp.position || (CU.role === 'manager' ? 'Manager' : 'Rank & File');
+        return;
+      }
+    }
+  } catch (e) { console.error(e); }
+
+  if (nameEl) nameEl.textContent = displayName;
+  if (posEl) posEl.textContent = CU.role === 'manager' ? 'Manager' : 'Rank & File';
 }
 
 </script>
@@ -283,31 +440,9 @@ async function createLoginForEmployee(yvpId) {
 
 
 // ── EDIT USER ACCESS ──────────────────────────────────
-function editUserAccess(uid, username, currentRole) {
-  document.getElementById('editAccessUid').value = uid;
-  document.getElementById('editAccessUsername').value = username;
-  document.getElementById('editAccessRole').value = currentRole === 'manager' ? 'manager' : 'rank_file';
-  document.getElementById('editAccessModal').classList.add('active');
-}
 
-async function saveUserAccess() {
-  const uid = document.getElementById('editAccessUid').value;
-  const newRole = document.getElementById('editAccessRole').value;
-  const username = document.getElementById('editAccessUsername').value;
-  if (!uid) { showToast('User not found', 'error'); return; }
-  if (username === 'admin' && newRole !== 'manager') {
-    showToast('Main admin must remain Manager', 'error'); return;
-  }
-  try {
-    await db.collection('users').doc(uid).update({ role: newRole });
-    closeModal('editAccessModal');
-    loadUsers();
-    showToast('User access updated to ' + (newRole === 'manager' ? 'Manager' : 'Rank & File'));
-  } catch (e) {
-    console.error(e);
-    showToast('Failed to update role', 'error');
-  }
-}
+
+
 
 async function deleteUserAccount(uid, username) {
   if (username === 'admin') { showToast('Cannot delete main admin account', 'error'); return; }
@@ -424,6 +559,185 @@ async function saveResetPassword() {
     closeModal('resetPassModal');
     await showResetPasswordForEmployee(yvpId, document.getElementById('resetUserDisplay')?.value || yvpId);
   }
+}
+
+
+// ── EDIT ATTENDANCE (Dashboard) ───────────────────────
+async function editAttendance(yvpId, empName, timeIn, timeOut, logId) {
+  const today = new Date().toISOString().slice(0, 10);
+  const docId = logId || (yvpId + '_' + today);
+
+  document.getElementById('editAttDocId').value = docId;
+  document.getElementById('editAttYvpId').value = yvpId;
+  document.getElementById('editAttDate').value = today;
+  document.getElementById('editAttName').value = empName || yvpId;
+  document.getElementById('editAttDateDisplay').value = today;
+  document.getElementById('editAttTimeIn').value = (timeIn && timeIn !== '—') ? timeIn : '';
+  document.getElementById('editAttTimeOut').value = (timeOut && timeOut !== '—') ? timeOut : '';
+  document.getElementById('editAttModal').classList.add('active');
+}
+
+function parseTimeForHours(timeStr, dateISO) {
+  if (!timeStr) return null;
+  const d = new Date(dateISO + ' ' + timeStr);
+  if (!isNaN(d.getTime())) return d;
+  // try common formats
+  const m = String(timeStr).match(/(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?/i);
+  if (!m) return null;
+  let h = parseInt(m[1], 10);
+  const min = parseInt(m[2], 10);
+  const sec = parseInt(m[3] || '0', 10);
+  const ap = (m[4] || '').toUpperCase();
+  if (ap === 'PM' && h < 12) h += 12;
+  if (ap === 'AM' && h === 12) h = 0;
+  const out = new Date(dateISO + 'T00:00:00');
+  out.setHours(h, min, sec, 0);
+  return out;
+}
+
+async function saveEditAttendance() {
+  const docId = document.getElementById('editAttDocId').value;
+  const yvpId = document.getElementById('editAttYvpId').value;
+  const date = document.getElementById('editAttDate').value;
+  const name = document.getElementById('editAttName').value;
+  const timeIn = document.getElementById('editAttTimeIn').value.trim();
+  const timeOut = document.getElementById('editAttTimeOut').value.trim();
+
+  if (!timeIn) {
+    showToast('Time In is required', 'error');
+    return;
+  }
+
+  let totalHours = null;
+  if (timeIn && timeOut) {
+    const d1 = parseTimeForHours(timeIn, date);
+    let d2 = parseTimeForHours(timeOut, date);
+    if (d1 && d2) {
+      let diff = (d2 - d1) / (1000 * 60 * 60);
+      if (diff < 0) diff += 24; // overnight shift
+      if (diff > 6) diff = 6;   // max 6 hours
+      if (diff < 0) diff = 0;
+      totalHours = diff.toFixed(2);
+    }
+  }
+
+  try {
+    const payload = {
+      yvpId: yvpId,
+      name: name,
+      date: date,
+      timeIn: timeIn,
+      timeOut: timeOut || null,
+      totalHours: totalHours,
+      manuallyEdited: true,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    };
+    await db.collection('attendance').doc(docId).set(payload, { merge: true });
+    closeModal('editAttModal');
+    showToast('Attendance updated — Reports & Payroll will reflect changes');
+    // UI refresh via realtime listener; also force local if needed
+    if (typeof renderDashboard === 'function') renderDashboard();
+    if (document.getElementById('sec-reports')?.classList.contains('active')) loadReports();
+    if (document.getElementById('sec-payroll')?.classList.contains('active')) loadPayroll();
+  } catch (e) {
+    console.error(e);
+    showToast('Failed to update attendance: ' + e.message, 'error');
+  }
+}
+
+async function loadUsers() {
+  const snap = await db.collection("users").get();
+  const users = snap.docs.map(d => ({id: d.id, ...d.data()}));
+  const tbody = document.getElementById("usersTbody");
+  if (!tbody) return;
+  tbody.innerHTML = users.length ? users.map(u => {
+    const role = u.role === 'manager' ? 'manager' : 'rank_file';
+    const roleLabel = role === 'manager' ? 'Manager' : 'Rank & File';
+    const badge = role === 'manager' ? 'badge-info' : 'badge-secondary';
+    const uname = (u.username || '').replace(/'/g, "\'");
+    return `<tr>
+      <td>${u.username || '—'}</td>
+      <td>${u.name || '—'}</td>
+      <td><span class="badge ${badge}">${roleLabel}</span></td>
+      <td>${u.yvpId || '—'}</td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-primary btn-sm" onclick="editUserAccess('${u.id}','${uname}','${role}')">Edit Access</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteUserAccount('${u.id}','${uname}')">Delete</button>
+      </td>
+    </tr>`;
+  }).join('') : `<tr><td colspan="5" style="text-align:center;color:#999">No users found</td></tr>`;
+}
+
+function editUserAccess(uid, username, currentRole) {
+  if (!uid) { showToast('User not found', 'error'); return; }
+  document.getElementById('editAccessUid').value = uid;
+  document.getElementById('editAccessUsername').value = username || '';
+  document.getElementById('editAccessRole').value = currentRole === 'manager' ? 'manager' : 'rank_file';
+  document.getElementById('editAccessModal').classList.add('active');
+}
+
+async function saveUserAccess() {
+  const uid = document.getElementById('editAccessUid').value;
+  const newRole = document.getElementById('editAccessRole').value;
+  const username = document.getElementById('editAccessUsername').value;
+
+  if (!uid) { showToast('User not found', 'error'); return; }
+  if (username === 'admin' && newRole !== 'manager') {
+    showToast('Main admin must remain Manager', 'error');
+    return;
+  }
+
+  try {
+    await db.collection('users').doc(uid).update({
+      role: newRole,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    closeModal('editAccessModal');
+    loadUsers();
+    showToast('Access updated to ' + (newRole === 'manager' ? 'Manager' : 'Rank & File'));
+
+    // If editing current user, refresh sidebar
+    if (CU && (CU.uid === uid || CU.username === username)) {
+      CU.role = newRole;
+      const roleEl = document.getElementById('sbRole');
+      if (roleEl) roleEl.textContent = newRole === 'manager' ? 'Manager' : 'Rank & File';
+      buildSidebar(newRole);
+    }
+  } catch (e) {
+    console.error(e);
+    showToast('Failed to update access: ' + e.message, 'error');
+  }
+}
+
+
+async function updateSidebarPosition() {
+  const posEl = document.getElementById('sbPosition');
+  const nameEl = document.getElementById('sbName');
+  if (!CU) return;
+
+  // Name
+  let displayName = CU.name || CU.username || '—';
+  try {
+    if (CU.yvpId) {
+      // Prefer live employee record for name + position
+      let emp = (typeof cachedEmployees !== 'undefined' ? cachedEmployees : []).find(e => e.yvpId === CU.yvpId);
+      if (!emp) {
+        const doc = await db.collection('employees').doc(CU.yvpId).get();
+        if (doc.exists) emp = doc.data();
+      }
+      if (emp) {
+        const full = [emp.firstName, emp.middleName, emp.lastName].filter(Boolean).join(' ')
+                  || [emp.lastName, emp.firstName, emp.middleName].filter(Boolean).join(' ');
+        if (full) displayName = full;
+        if (nameEl) nameEl.textContent = displayName;
+        if (posEl) posEl.textContent = emp.position || (CU.role === 'manager' ? 'Manager' : 'Rank & File');
+        return;
+      }
+    }
+  } catch (e) { console.error(e); }
+
+  if (nameEl) nameEl.textContent = displayName;
+  if (posEl) posEl.textContent = CU.role === 'manager' ? 'Manager' : 'Rank & File';
 }
 
 </script>
@@ -494,31 +808,9 @@ async function createLoginForEmployee(yvpId) {
 
 
 // ── EDIT USER ACCESS ──────────────────────────────────
-function editUserAccess(uid, username, currentRole) {
-  document.getElementById('editAccessUid').value = uid;
-  document.getElementById('editAccessUsername').value = username;
-  document.getElementById('editAccessRole').value = currentRole === 'manager' ? 'manager' : 'rank_file';
-  document.getElementById('editAccessModal').classList.add('active');
-}
 
-async function saveUserAccess() {
-  const uid = document.getElementById('editAccessUid').value;
-  const newRole = document.getElementById('editAccessRole').value;
-  const username = document.getElementById('editAccessUsername').value;
-  if (!uid) { showToast('User not found', 'error'); return; }
-  if (username === 'admin' && newRole !== 'manager') {
-    showToast('Main admin must remain Manager', 'error'); return;
-  }
-  try {
-    await db.collection('users').doc(uid).update({ role: newRole });
-    closeModal('editAccessModal');
-    loadUsers();
-    showToast('User access updated to ' + (newRole === 'manager' ? 'Manager' : 'Rank & File'));
-  } catch (e) {
-    console.error(e);
-    showToast('Failed to update role', 'error');
-  }
-}
+
+
 
 async function deleteUserAccount(uid, username) {
   if (username === 'admin') { showToast('Cannot delete main admin account', 'error'); return; }
@@ -635,6 +927,185 @@ async function saveResetPassword() {
     closeModal('resetPassModal');
     await showResetPasswordForEmployee(yvpId, document.getElementById('resetUserDisplay')?.value || yvpId);
   }
+}
+
+
+// ── EDIT ATTENDANCE (Dashboard) ───────────────────────
+async function editAttendance(yvpId, empName, timeIn, timeOut, logId) {
+  const today = new Date().toISOString().slice(0, 10);
+  const docId = logId || (yvpId + '_' + today);
+
+  document.getElementById('editAttDocId').value = docId;
+  document.getElementById('editAttYvpId').value = yvpId;
+  document.getElementById('editAttDate').value = today;
+  document.getElementById('editAttName').value = empName || yvpId;
+  document.getElementById('editAttDateDisplay').value = today;
+  document.getElementById('editAttTimeIn').value = (timeIn && timeIn !== '—') ? timeIn : '';
+  document.getElementById('editAttTimeOut').value = (timeOut && timeOut !== '—') ? timeOut : '';
+  document.getElementById('editAttModal').classList.add('active');
+}
+
+function parseTimeForHours(timeStr, dateISO) {
+  if (!timeStr) return null;
+  const d = new Date(dateISO + ' ' + timeStr);
+  if (!isNaN(d.getTime())) return d;
+  // try common formats
+  const m = String(timeStr).match(/(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?/i);
+  if (!m) return null;
+  let h = parseInt(m[1], 10);
+  const min = parseInt(m[2], 10);
+  const sec = parseInt(m[3] || '0', 10);
+  const ap = (m[4] || '').toUpperCase();
+  if (ap === 'PM' && h < 12) h += 12;
+  if (ap === 'AM' && h === 12) h = 0;
+  const out = new Date(dateISO + 'T00:00:00');
+  out.setHours(h, min, sec, 0);
+  return out;
+}
+
+async function saveEditAttendance() {
+  const docId = document.getElementById('editAttDocId').value;
+  const yvpId = document.getElementById('editAttYvpId').value;
+  const date = document.getElementById('editAttDate').value;
+  const name = document.getElementById('editAttName').value;
+  const timeIn = document.getElementById('editAttTimeIn').value.trim();
+  const timeOut = document.getElementById('editAttTimeOut').value.trim();
+
+  if (!timeIn) {
+    showToast('Time In is required', 'error');
+    return;
+  }
+
+  let totalHours = null;
+  if (timeIn && timeOut) {
+    const d1 = parseTimeForHours(timeIn, date);
+    let d2 = parseTimeForHours(timeOut, date);
+    if (d1 && d2) {
+      let diff = (d2 - d1) / (1000 * 60 * 60);
+      if (diff < 0) diff += 24; // overnight shift
+      if (diff > 6) diff = 6;   // max 6 hours
+      if (diff < 0) diff = 0;
+      totalHours = diff.toFixed(2);
+    }
+  }
+
+  try {
+    const payload = {
+      yvpId: yvpId,
+      name: name,
+      date: date,
+      timeIn: timeIn,
+      timeOut: timeOut || null,
+      totalHours: totalHours,
+      manuallyEdited: true,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    };
+    await db.collection('attendance').doc(docId).set(payload, { merge: true });
+    closeModal('editAttModal');
+    showToast('Attendance updated — Reports & Payroll will reflect changes');
+    // UI refresh via realtime listener; also force local if needed
+    if (typeof renderDashboard === 'function') renderDashboard();
+    if (document.getElementById('sec-reports')?.classList.contains('active')) loadReports();
+    if (document.getElementById('sec-payroll')?.classList.contains('active')) loadPayroll();
+  } catch (e) {
+    console.error(e);
+    showToast('Failed to update attendance: ' + e.message, 'error');
+  }
+}
+
+async function loadUsers() {
+  const snap = await db.collection("users").get();
+  const users = snap.docs.map(d => ({id: d.id, ...d.data()}));
+  const tbody = document.getElementById("usersTbody");
+  if (!tbody) return;
+  tbody.innerHTML = users.length ? users.map(u => {
+    const role = u.role === 'manager' ? 'manager' : 'rank_file';
+    const roleLabel = role === 'manager' ? 'Manager' : 'Rank & File';
+    const badge = role === 'manager' ? 'badge-info' : 'badge-secondary';
+    const uname = (u.username || '').replace(/'/g, "\'");
+    return `<tr>
+      <td>${u.username || '—'}</td>
+      <td>${u.name || '—'}</td>
+      <td><span class="badge ${badge}">${roleLabel}</span></td>
+      <td>${u.yvpId || '—'}</td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-primary btn-sm" onclick="editUserAccess('${u.id}','${uname}','${role}')">Edit Access</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteUserAccount('${u.id}','${uname}')">Delete</button>
+      </td>
+    </tr>`;
+  }).join('') : `<tr><td colspan="5" style="text-align:center;color:#999">No users found</td></tr>`;
+}
+
+function editUserAccess(uid, username, currentRole) {
+  if (!uid) { showToast('User not found', 'error'); return; }
+  document.getElementById('editAccessUid').value = uid;
+  document.getElementById('editAccessUsername').value = username || '';
+  document.getElementById('editAccessRole').value = currentRole === 'manager' ? 'manager' : 'rank_file';
+  document.getElementById('editAccessModal').classList.add('active');
+}
+
+async function saveUserAccess() {
+  const uid = document.getElementById('editAccessUid').value;
+  const newRole = document.getElementById('editAccessRole').value;
+  const username = document.getElementById('editAccessUsername').value;
+
+  if (!uid) { showToast('User not found', 'error'); return; }
+  if (username === 'admin' && newRole !== 'manager') {
+    showToast('Main admin must remain Manager', 'error');
+    return;
+  }
+
+  try {
+    await db.collection('users').doc(uid).update({
+      role: newRole,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    closeModal('editAccessModal');
+    loadUsers();
+    showToast('Access updated to ' + (newRole === 'manager' ? 'Manager' : 'Rank & File'));
+
+    // If editing current user, refresh sidebar
+    if (CU && (CU.uid === uid || CU.username === username)) {
+      CU.role = newRole;
+      const roleEl = document.getElementById('sbRole');
+      if (roleEl) roleEl.textContent = newRole === 'manager' ? 'Manager' : 'Rank & File';
+      buildSidebar(newRole);
+    }
+  } catch (e) {
+    console.error(e);
+    showToast('Failed to update access: ' + e.message, 'error');
+  }
+}
+
+
+async function updateSidebarPosition() {
+  const posEl = document.getElementById('sbPosition');
+  const nameEl = document.getElementById('sbName');
+  if (!CU) return;
+
+  // Name
+  let displayName = CU.name || CU.username || '—';
+  try {
+    if (CU.yvpId) {
+      // Prefer live employee record for name + position
+      let emp = (typeof cachedEmployees !== 'undefined' ? cachedEmployees : []).find(e => e.yvpId === CU.yvpId);
+      if (!emp) {
+        const doc = await db.collection('employees').doc(CU.yvpId).get();
+        if (doc.exists) emp = doc.data();
+      }
+      if (emp) {
+        const full = [emp.firstName, emp.middleName, emp.lastName].filter(Boolean).join(' ')
+                  || [emp.lastName, emp.firstName, emp.middleName].filter(Boolean).join(' ');
+        if (full) displayName = full;
+        if (nameEl) nameEl.textContent = displayName;
+        if (posEl) posEl.textContent = emp.position || (CU.role === 'manager' ? 'Manager' : 'Rank & File');
+        return;
+      }
+    }
+  } catch (e) { console.error(e); }
+
+  if (nameEl) nameEl.textContent = displayName;
+  if (posEl) posEl.textContent = CU.role === 'manager' ? 'Manager' : 'Rank & File';
 }
 
 </script>
@@ -879,6 +1350,185 @@ async function saveResetPassword() {
   }
 }
 
+
+// ── EDIT ATTENDANCE (Dashboard) ───────────────────────
+async function editAttendance(yvpId, empName, timeIn, timeOut, logId) {
+  const today = new Date().toISOString().slice(0, 10);
+  const docId = logId || (yvpId + '_' + today);
+
+  document.getElementById('editAttDocId').value = docId;
+  document.getElementById('editAttYvpId').value = yvpId;
+  document.getElementById('editAttDate').value = today;
+  document.getElementById('editAttName').value = empName || yvpId;
+  document.getElementById('editAttDateDisplay').value = today;
+  document.getElementById('editAttTimeIn').value = (timeIn && timeIn !== '—') ? timeIn : '';
+  document.getElementById('editAttTimeOut').value = (timeOut && timeOut !== '—') ? timeOut : '';
+  document.getElementById('editAttModal').classList.add('active');
+}
+
+function parseTimeForHours(timeStr, dateISO) {
+  if (!timeStr) return null;
+  const d = new Date(dateISO + ' ' + timeStr);
+  if (!isNaN(d.getTime())) return d;
+  // try common formats
+  const m = String(timeStr).match(/(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?/i);
+  if (!m) return null;
+  let h = parseInt(m[1], 10);
+  const min = parseInt(m[2], 10);
+  const sec = parseInt(m[3] || '0', 10);
+  const ap = (m[4] || '').toUpperCase();
+  if (ap === 'PM' && h < 12) h += 12;
+  if (ap === 'AM' && h === 12) h = 0;
+  const out = new Date(dateISO + 'T00:00:00');
+  out.setHours(h, min, sec, 0);
+  return out;
+}
+
+async function saveEditAttendance() {
+  const docId = document.getElementById('editAttDocId').value;
+  const yvpId = document.getElementById('editAttYvpId').value;
+  const date = document.getElementById('editAttDate').value;
+  const name = document.getElementById('editAttName').value;
+  const timeIn = document.getElementById('editAttTimeIn').value.trim();
+  const timeOut = document.getElementById('editAttTimeOut').value.trim();
+
+  if (!timeIn) {
+    showToast('Time In is required', 'error');
+    return;
+  }
+
+  let totalHours = null;
+  if (timeIn && timeOut) {
+    const d1 = parseTimeForHours(timeIn, date);
+    let d2 = parseTimeForHours(timeOut, date);
+    if (d1 && d2) {
+      let diff = (d2 - d1) / (1000 * 60 * 60);
+      if (diff < 0) diff += 24; // overnight shift
+      if (diff > 6) diff = 6;   // max 6 hours
+      if (diff < 0) diff = 0;
+      totalHours = diff.toFixed(2);
+    }
+  }
+
+  try {
+    const payload = {
+      yvpId: yvpId,
+      name: name,
+      date: date,
+      timeIn: timeIn,
+      timeOut: timeOut || null,
+      totalHours: totalHours,
+      manuallyEdited: true,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    };
+    await db.collection('attendance').doc(docId).set(payload, { merge: true });
+    closeModal('editAttModal');
+    showToast('Attendance updated — Reports & Payroll will reflect changes');
+    // UI refresh via realtime listener; also force local if needed
+    if (typeof renderDashboard === 'function') renderDashboard();
+    if (document.getElementById('sec-reports')?.classList.contains('active')) loadReports();
+    if (document.getElementById('sec-payroll')?.classList.contains('active')) loadPayroll();
+  } catch (e) {
+    console.error(e);
+    showToast('Failed to update attendance: ' + e.message, 'error');
+  }
+}
+
+async function loadUsers() {
+  const snap = await db.collection("users").get();
+  const users = snap.docs.map(d => ({id: d.id, ...d.data()}));
+  const tbody = document.getElementById("usersTbody");
+  if (!tbody) return;
+  tbody.innerHTML = users.length ? users.map(u => {
+    const role = u.role === 'manager' ? 'manager' : 'rank_file';
+    const roleLabel = role === 'manager' ? 'Manager' : 'Rank & File';
+    const badge = role === 'manager' ? 'badge-info' : 'badge-secondary';
+    const uname = (u.username || '').replace(/'/g, "\'");
+    return `<tr>
+      <td>${u.username || '—'}</td>
+      <td>${u.name || '—'}</td>
+      <td><span class="badge ${badge}">${roleLabel}</span></td>
+      <td>${u.yvpId || '—'}</td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-primary btn-sm" onclick="editUserAccess('${u.id}','${uname}','${role}')">Edit Access</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteUserAccount('${u.id}','${uname}')">Delete</button>
+      </td>
+    </tr>`;
+  }).join('') : `<tr><td colspan="5" style="text-align:center;color:#999">No users found</td></tr>`;
+}
+
+function editUserAccess(uid, username, currentRole) {
+  if (!uid) { showToast('User not found', 'error'); return; }
+  document.getElementById('editAccessUid').value = uid;
+  document.getElementById('editAccessUsername').value = username || '';
+  document.getElementById('editAccessRole').value = currentRole === 'manager' ? 'manager' : 'rank_file';
+  document.getElementById('editAccessModal').classList.add('active');
+}
+
+async function saveUserAccess() {
+  const uid = document.getElementById('editAccessUid').value;
+  const newRole = document.getElementById('editAccessRole').value;
+  const username = document.getElementById('editAccessUsername').value;
+
+  if (!uid) { showToast('User not found', 'error'); return; }
+  if (username === 'admin' && newRole !== 'manager') {
+    showToast('Main admin must remain Manager', 'error');
+    return;
+  }
+
+  try {
+    await db.collection('users').doc(uid).update({
+      role: newRole,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    closeModal('editAccessModal');
+    loadUsers();
+    showToast('Access updated to ' + (newRole === 'manager' ? 'Manager' : 'Rank & File'));
+
+    // If editing current user, refresh sidebar
+    if (CU && (CU.uid === uid || CU.username === username)) {
+      CU.role = newRole;
+      const roleEl = document.getElementById('sbRole');
+      if (roleEl) roleEl.textContent = newRole === 'manager' ? 'Manager' : 'Rank & File';
+      buildSidebar(newRole);
+    }
+  } catch (e) {
+    console.error(e);
+    showToast('Failed to update access: ' + e.message, 'error');
+  }
+}
+
+
+async function updateSidebarPosition() {
+  const posEl = document.getElementById('sbPosition');
+  const nameEl = document.getElementById('sbName');
+  if (!CU) return;
+
+  // Name
+  let displayName = CU.name || CU.username || '—';
+  try {
+    if (CU.yvpId) {
+      // Prefer live employee record for name + position
+      let emp = (typeof cachedEmployees !== 'undefined' ? cachedEmployees : []).find(e => e.yvpId === CU.yvpId);
+      if (!emp) {
+        const doc = await db.collection('employees').doc(CU.yvpId).get();
+        if (doc.exists) emp = doc.data();
+      }
+      if (emp) {
+        const full = [emp.firstName, emp.middleName, emp.lastName].filter(Boolean).join(' ')
+                  || [emp.lastName, emp.firstName, emp.middleName].filter(Boolean).join(' ');
+        if (full) displayName = full;
+        if (nameEl) nameEl.textContent = displayName;
+        if (posEl) posEl.textContent = emp.position || (CU.role === 'manager' ? 'Manager' : 'Rank & File');
+        return;
+      }
+    }
+  } catch (e) { console.error(e); }
+
+  if (nameEl) nameEl.textContent = displayName;
+  if (posEl) posEl.textContent = CU.role === 'manager' ? 'Manager' : 'Rank & File';
+}
+
 </script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -1040,6 +1690,67 @@ tbody td{padding:10px 12px;border-bottom:1px solid #eee}
   </div>
 </div>
 
+
+<!-- EDIT ATTENDANCE MODAL -->
+<div class="modal-overlay" id="editAttModal">
+  <div class="modal-box" style="max-width:440px;text-align:left">
+    <button class="modal-close" onclick="closeModal('editAttModal')">✕</button>
+    <h3 style="color:#1a237e;margin-bottom:6px">✏️ Edit Attendance</h3>
+    <p style="font-size:13px;color:#666;margin-bottom:16px">Manually update Time In / Time Out. Changes apply to Reports and Payroll.</p>
+    <input type="hidden" id="editAttDocId"/>
+    <input type="hidden" id="editAttYvpId"/>
+    <input type="hidden" id="editAttDate"/>
+    <div class="form-group">
+      <label>Employee</label>
+      <input type="text" id="editAttName" readonly style="background:#f0f0f0"/>
+    </div>
+    <div class="form-group">
+      <label>Date</label>
+      <input type="text" id="editAttDateDisplay" readonly style="background:#f0f0f0"/>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Time In *</label>
+        <input type="text" id="editAttTimeIn" placeholder="e.g. 09:00:00 PM"/>
+      </div>
+      <div class="form-group">
+        <label>Time Out</label>
+        <input type="text" id="editAttTimeOut" placeholder="e.g. 06:00:00 AM (optional)"/>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('editAttModal')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveEditAttendance()">💾 Save Changes</button>
+    </div>
+  </div>
+</div>
+
+
+<!-- EDIT USER ACCESS MODAL -->
+<div class="modal-overlay" id="editAccessModal">
+  <div class="modal-box" style="max-width:420px;text-align:left">
+    <button class="modal-close" onclick="closeModal('editAccessModal')">✕</button>
+    <h3 style="color:#1a237e;margin-bottom:6px">✏️ Edit User Access</h3>
+    <p style="font-size:13px;color:#666;margin-bottom:16px">Assign Rank &amp; File or Manager access.</p>
+    <input type="hidden" id="editAccessUid"/>
+    <div class="form-group">
+      <label>Username</label>
+      <input type="text" id="editAccessUsername" readonly style="background:#f0f0f0"/>
+    </div>
+    <div class="form-group">
+      <label>Role / Access Type *</label>
+      <select id="editAccessRole">
+        <option value="rank_file">Rank &amp; File</option>
+        <option value="manager">Manager</option>
+      </select>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('editAccessModal')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveUserAccess()">💾 Save Changes</button>
+    </div>
+  </div>
+</div>
+
 <!-- LOGIN -->
 <div id="loginScreen">
   <div class="login-card">
@@ -1067,13 +1778,14 @@ tbody td{padding:10px 12px;border-bottom:1px solid #eee}
       <h1>YVP Timekeeping</h1>
       <span>TIME MANAGEMENT SYSTEM</span>
     </div>
-    <div class="sidebar-user">
+    <div class="sidebar-user" style="text-align:center">
       <div style="position:relative;display:inline-block;margin-bottom:8px">
         <div class="user-avatar" id="sbAvatar" style="width:72px;height:96px;border-radius:8px;cursor:pointer;font-size:22px" title="Click to upload photo" onclick="document.getElementById('profilePicInput').click()">?</div>
-      <input type="file" id="profilePicInput" accept="image/*" style="display:none" onchange="handleProfilePicUpload(event)"/>
+        <input type="file" id="profilePicInput" accept="image/*" style="display:none" onchange="handleProfilePicUpload(event)"/>
       </div>
-      <div class="user-name" id="sbName">—</div>
-      <div class="user-role" id="sbRole">—</div>
+      <div class="user-name" id="sbName" style="font-weight:700;font-size:13px;color:#fff">—</div>
+      <div class="user-role" id="sbPosition" style="font-size:11px;color:rgba(255,255,255,0.65);margin-top:2px">—</div>
+      <div id="sbRole" style="display:none">—</div>
     </div>
     <div class="sidebar-nav" id="sidebarNav"></div>
     <div class="sidebar-logout">
@@ -1255,7 +1967,7 @@ tbody td{padding:10px 12px;border-bottom:1px solid #eee}
         <div class="table-wrapper">
           <table>
             <thead><tr>
-              <th>YVP ID</th><th>Name</th><th>Total Hours</th><th>Hourly Rate</th><th>Tardiness Deduction</th><th>Total Billing (USD)</th>
+              <th>YVP ID</th><th>Name</th><th>Total Hours</th><th>Hourly Rate</th><th>Total Billing (USD)</th>
             </tr></thead>
             <tbody id="payrollTbody"></tbody>
           </table>
@@ -1391,7 +2103,9 @@ function initSessionUI() {
   document.getElementById('loginScreen').style.display = 'none';
   document.getElementById('mainApp').style.display = 'flex';
   document.getElementById('sbName').textContent = CU.name || CU.username;
+  updateSidebarPosition();
   document.getElementById('sbRole').textContent = CU.role === 'manager' ? 'Manager' : 'Rank & File';
+  updateSidebarPosition();
   document.getElementById('sbAvatar').textContent = (CU.name || CU.username).charAt(0).toUpperCase();
 
   buildSidebar(CU.role);
@@ -1443,11 +2157,14 @@ function showSection(id) {
 }
 
 async function preloadGlobalData() {
+  // will refresh position after employees load
+
   const [eSnap, sSnap] = await Promise.all([
     db.collection('employees').get(),
     db.collection('schedules').get()
   ]);
   cachedEmployees = eSnap.docs.map(d => d.data());
+  if (typeof updateSidebarPosition === "function") updateSidebarPosition();
   cachedSchedules = sSnap.docs.map(d => d.data());
   renderMySchedule();
 }
@@ -1653,7 +2370,10 @@ function renderDashboard() {
           <td>${r.hours}</td>
           <td><span class="badge ${r.badge}">${r.status}</span></td>
           <td>${r.tardyText}</td>
-          <td>${r.logId ? `<button class="btn btn-danger btn-sm" onclick="deleteLog('${r.logId}')">Del</button>` : '—'}</td>
+          <td style="white-space:nowrap">
+            <button class="btn btn-primary btn-sm" onclick="editAttendance('${r.yvpId}','${r.empName.replace(/'/g, "\'")}','${r.timeIn}','${r.timeOut}','${r.logId||''}')">Edit</button>
+            ${r.logId ? `<button class="btn btn-danger btn-sm" onclick="deleteLog('${r.logId}')">Del</button>` : ''}
+          </td>
         </tr>
       `).join('');
     }
@@ -1970,70 +2690,39 @@ async function loadPayroll() {
     const l = d.data();
     if (fromDate && l.date < fromDate) return;
     if (toDate && l.date > toDate) return;
+    if (!l.timeIn || !l.timeOut) return; // only completed shifts count
 
     const yvpId = l.yvpId;
     if (!summary[yvpId]) {
-      summary[yvpId] = { name: getEmployeeFullName(yvpId) || l.name, hours: 0, deduction: 0, absentShifts: 0, shifts: 0 };
+      summary[yvpId] = { name: getEmployeeFullName(yvpId) || l.name, hours: 0 };
     }
-
-    const hasIn = !!l.timeIn;
-    const hasOut = !!l.timeOut;
-
-    // Absent record (scheduled but no punch) — if somehow stored
-    if (!hasIn && !hasOut) {
-      summary[yvpId].absentShifts += 1;
-      return;
-    }
-
-    if (hasIn && hasOut) {
-      let hrs = parseFloat(l.totalHours) || 0;
-      if (hrs > 6) hrs = 6;
-      summary[yvpId].hours += hrs;
-      summary[yvpId].shifts += 1;
-
-      const sched = (cachedSchedules || []).find(s => s.yvpId === yvpId && isScheduledOnDate(s, l.date));
-      if (sched && l.timeIn) {
-        const late = minutesLate(sched.shift || sched.schedule, l.timeIn);
-        summary[yvpId].deduction += tardinessDeduction(late);
-      }
-    }
+    let hrs = parseFloat(l.totalHours) || 0;
+    if (hrs > 6) hrs = 6;
+    summary[yvpId].hours += hrs;
   });
-
-  // Also mark scheduled but no attendance as absent → billing 0 for those days isn't added as hours
-  // (absent contributes 0 hours already)
 
   const tbody = document.getElementById('payrollTbody');
   const ids = Object.keys(summary).sort();
   if (!ids.length) {
-    tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:#999">No data in selected period</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:#999">No data in selected period</td></tr>`;
     return;
   }
 
   tbody.innerHTML = ids.map(id => {
     const s = summary[id];
     const rate = rates[id] || 0;
-    let billing = s.hours * rate - s.deduction;
-    if (billing < 0) billing = 0;
-    // If only absences and no hours
-    if (s.hours === 0) billing = 0;
+    const billing = s.hours * rate;
     return `<tr>
       <td>${id}</td>
       <td>${s.name}</td>
       <td>${s.hours.toFixed(2)}</td>
       <td>$${rate.toFixed(2)}</td>
-      <td>$${s.deduction.toFixed(2)}</td>
       <td><b>$${billing.toFixed(2)}</b></td>
     </tr>`;
   }).join('');
 }
 
-async function loadUsers() {
-  const snap = await db.collection('users').get();
-  const users = snap.docs.map(d => d.data());
-  document.getElementById('usersTbody').innerHTML = users.map(u => `
-    <tr><td>${u.username}</td><td><span class="badge badge-info">${u.role}</span></td><td>${u.yvpId || '—'}</td></tr>
-  `).join('');
-}
+
 
 // ── BULK EMPLOYEE UPLOAD / TEMPLATE ───────────────────
 function downloadEmpTemplate() {
@@ -2207,30 +2896,27 @@ async function exportPayrollReport() {
     const l = d.data();
     if (fromDate && l.date < fromDate) return;
     if (toDate && l.date > toDate) return;
+    if (!l.timeIn || !l.timeOut) return;
     const yvpId = l.yvpId;
-    if (!summary[yvpId]) summary[yvpId] = { name: getEmployeeFullName(yvpId) || l.name, hours: 0, deduction: 0 };
-    if (l.timeIn && l.timeOut) {
-      let hrs = parseFloat(l.totalHours) || 0;
-      if (hrs > 6) hrs = 6;
-      summary[yvpId].hours += hrs;
-      const sched = (cachedSchedules || []).find(s => s.yvpId === yvpId && isScheduledOnDate(s, l.date));
-      if (sched && l.timeIn) summary[yvpId].deduction += tardinessDeduction(minutesLate(sched.shift || sched.schedule, l.timeIn));
-    }
+    if (!summary[yvpId]) summary[yvpId] = { name: getEmployeeFullName(yvpId) || l.name, hours: 0 };
+    let hrs = parseFloat(l.totalHours) || 0;
+    if (hrs > 6) hrs = 6;
+    summary[yvpId].hours += hrs;
   });
 
   const ids = Object.keys(summary).sort();
   if (!ids.length) { showToast("No data in selected period", "error"); return; }
 
-  const headers = ["YVP ID","Name","Total Hours","Hourly Rate (USD)","Tardiness Deduction (USD)","Total Billing (USD)"];
+  const headers = ["YVP ID","Name","Total Hours","Hourly Rate (USD)","Total Billing (USD)"];
   const rows = ids.map(id => {
     const s = summary[id];
     const rate = rates[id] || 0;
-    let billing = s.hours * rate - s.deduction;
-    if (billing < 0 || s.hours === 0) billing = 0;
-    return [id, s.name, s.hours.toFixed(2), rate.toFixed(2), s.deduction.toFixed(2), billing.toFixed(2)];
+    const billing = s.hours * rate;
+    return [id, s.name, s.hours.toFixed(2), rate.toFixed(2), billing.toFixed(2)];
   });
-  const totalB = rows.reduce((s,r) => s + parseFloat(r[5]), 0);
-  rows.push(["","TOTAL","","","", totalB.toFixed(2)]);
+  const totalB = rows.reduce((s,r) => s + parseFloat(r[4]), 0);
+  const totalH = rows.reduce((s,r) => s + parseFloat(r[2]), 0);
+  rows.push(["","TOTAL", totalH.toFixed(2), "", totalB.toFixed(2)]);
 
   const periodLabel = (fromDate || toDate) ? `Period: ${fromDate || '...'} to ${toDate || '...'}` : 'Period: All dates';
   const ws = XLSX.utils.aoa_to_sheet([[periodLabel], [], headers, ...rows]);
@@ -2331,49 +3017,85 @@ async function createAllRankFileLogins() {
 // ── PROFILE PICTURE ───────────────────────────────────
 async function handleProfilePicUpload(event) {
   const file = event.target.files[0];
-  if (!file || !file.type.startsWith("image/")) { showToast("Select an image","error"); return; }
-  if (file.size > 1.5*1024*1024) { showToast("Image must be under 1.5MB","error"); return; }
-  const reader = new FileReader();
-  reader.onload = async function(e) {
-    const dataUrl = e.target.result;
-    // Store in Firestore under user profile (small images only)
-    try {
-      if (CU && CU.uid) {
-        await db.collection("users").doc(CU.uid).update({ photoURL: dataUrl });
-        CU.photoURL = dataUrl;
-      }
-      const av = document.getElementById("sbAvatar");
-      av.style.backgroundImage = `url(${dataUrl})`;
+  if (!file) return;
+  if (!file.type.startsWith("image/")) {
+    showToast("Please select an image file", "error");
+    return;
+  }
+  if (file.size > 5 * 1024 * 1024) {
+    showToast("Image must be under 5MB", "error");
+    return;
+  }
+
+  try {
+    // Resize/compress to passport-ish size to fit Firestore limits
+    const dataUrl = await resizeImageToDataURL(file, 240, 320, 0.7);
+
+    // Show immediately on avatar
+    const av = document.getElementById("sbAvatar");
+    if (av) {
+      av.style.backgroundImage = "url(" + dataUrl + ")";
       av.style.backgroundSize = "cover";
       av.style.backgroundPosition = "center";
       av.textContent = "";
-      showToast("Profile photo updated");
-    } catch(err) {
-      console.error(err);
-      showToast("Failed to save photo","error");
     }
-  };
-  reader.readAsDataURL(file);
+
+    // Resolve user doc id
+    let uid = CU && CU.uid ? CU.uid : null;
+    if (!uid && CU && CU.username) {
+      const q = await db.collection("users").where("username", "==", CU.username).limit(1).get();
+      if (!q.empty) uid = q.docs[0].id;
+    }
+
+    if (uid) {
+      await db.collection("users").doc(uid).set({ photoURL: dataUrl }, { merge: true });
+      CU.uid = uid;
+      CU.photoURL = dataUrl;
+      showToast("Profile photo updated");
+    } else {
+      // Fallback: keep on screen for this session
+      if (CU) CU.photoURL = dataUrl;
+      showToast("Photo shown (could not save to account — missing user id)", "error");
+    }
+  } catch (err) {
+    console.error("Photo upload error:", err);
+    showToast("Failed to upload photo: " + (err.message || "unknown error"), "error");
+  }
   event.target.value = "";
 }
 
-// Update loadUsers to show more columns + actions
-async function loadUsers() {
-  const snap = await db.collection("users").get();
-  const users = snap.docs.map(d => ({id:d.id, ...d.data()}));
-  document.getElementById("usersTbody").innerHTML = users.length ? users.map(u => `
-    <tr>
-      <td>${u.username||"—"}</td>
-      <td>${u.name||"—"}</td>
-      <td><span class="badge ${u.role==="manager"?"badge-info":"badge-secondary"}">${u.role==="manager"?"Manager":"Rank & File"}</span></td>
-      <td>${u.yvpId||"—"}</td>
-      <td style="white-space:nowrap">
-        <button class="btn btn-primary btn-sm" onclick="editUserAccess('${u.id}','${u.username}','${u.role||'rank_file'}')">Edit Access</button>
-        <button class="btn btn-danger btn-sm" onclick="deleteUserAccount('${u.id}','${u.username}')">Delete</button>
-      </td>
-    </tr>
-  `).join("") : `<tr><td colspan="5" style="text-align:center;color:#999">No users found</td></tr>`;
+function resizeImageToDataURL(file, maxW, maxH, quality) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Could not read file"));
+    reader.onload = function(e) {
+      const img = new Image();
+      img.onerror = () => reject(new Error("Invalid image"));
+      img.onload = function() {
+        let w = img.width;
+        let h = img.height;
+        const ratio = Math.min(maxW / w, maxH / h, 1);
+        w = Math.round(w * ratio);
+        h = Math.round(h * ratio);
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, w, h);
+        try {
+          resolve(canvas.toDataURL("image/jpeg", quality || 0.7));
+        } catch (err) {
+          reject(err);
+        }
+      };
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
 }
+
+// Update loadUsers to show more columns + actions
+
 
 // Improve saveEmployee to include all fields
 async function saveEmployee() {
@@ -2682,6 +3404,185 @@ async function saveResetPassword() {
     closeModal('resetPassModal');
     await showResetPasswordForEmployee(yvpId, document.getElementById('resetUserDisplay')?.value || yvpId);
   }
+}
+
+
+// ── EDIT ATTENDANCE (Dashboard) ───────────────────────
+async function editAttendance(yvpId, empName, timeIn, timeOut, logId) {
+  const today = new Date().toISOString().slice(0, 10);
+  const docId = logId || (yvpId + '_' + today);
+
+  document.getElementById('editAttDocId').value = docId;
+  document.getElementById('editAttYvpId').value = yvpId;
+  document.getElementById('editAttDate').value = today;
+  document.getElementById('editAttName').value = empName || yvpId;
+  document.getElementById('editAttDateDisplay').value = today;
+  document.getElementById('editAttTimeIn').value = (timeIn && timeIn !== '—') ? timeIn : '';
+  document.getElementById('editAttTimeOut').value = (timeOut && timeOut !== '—') ? timeOut : '';
+  document.getElementById('editAttModal').classList.add('active');
+}
+
+function parseTimeForHours(timeStr, dateISO) {
+  if (!timeStr) return null;
+  const d = new Date(dateISO + ' ' + timeStr);
+  if (!isNaN(d.getTime())) return d;
+  // try common formats
+  const m = String(timeStr).match(/(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?/i);
+  if (!m) return null;
+  let h = parseInt(m[1], 10);
+  const min = parseInt(m[2], 10);
+  const sec = parseInt(m[3] || '0', 10);
+  const ap = (m[4] || '').toUpperCase();
+  if (ap === 'PM' && h < 12) h += 12;
+  if (ap === 'AM' && h === 12) h = 0;
+  const out = new Date(dateISO + 'T00:00:00');
+  out.setHours(h, min, sec, 0);
+  return out;
+}
+
+async function saveEditAttendance() {
+  const docId = document.getElementById('editAttDocId').value;
+  const yvpId = document.getElementById('editAttYvpId').value;
+  const date = document.getElementById('editAttDate').value;
+  const name = document.getElementById('editAttName').value;
+  const timeIn = document.getElementById('editAttTimeIn').value.trim();
+  const timeOut = document.getElementById('editAttTimeOut').value.trim();
+
+  if (!timeIn) {
+    showToast('Time In is required', 'error');
+    return;
+  }
+
+  let totalHours = null;
+  if (timeIn && timeOut) {
+    const d1 = parseTimeForHours(timeIn, date);
+    let d2 = parseTimeForHours(timeOut, date);
+    if (d1 && d2) {
+      let diff = (d2 - d1) / (1000 * 60 * 60);
+      if (diff < 0) diff += 24; // overnight shift
+      if (diff > 6) diff = 6;   // max 6 hours
+      if (diff < 0) diff = 0;
+      totalHours = diff.toFixed(2);
+    }
+  }
+
+  try {
+    const payload = {
+      yvpId: yvpId,
+      name: name,
+      date: date,
+      timeIn: timeIn,
+      timeOut: timeOut || null,
+      totalHours: totalHours,
+      manuallyEdited: true,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    };
+    await db.collection('attendance').doc(docId).set(payload, { merge: true });
+    closeModal('editAttModal');
+    showToast('Attendance updated — Reports & Payroll will reflect changes');
+    // UI refresh via realtime listener; also force local if needed
+    if (typeof renderDashboard === 'function') renderDashboard();
+    if (document.getElementById('sec-reports')?.classList.contains('active')) loadReports();
+    if (document.getElementById('sec-payroll')?.classList.contains('active')) loadPayroll();
+  } catch (e) {
+    console.error(e);
+    showToast('Failed to update attendance: ' + e.message, 'error');
+  }
+}
+
+async function loadUsers() {
+  const snap = await db.collection("users").get();
+  const users = snap.docs.map(d => ({id: d.id, ...d.data()}));
+  const tbody = document.getElementById("usersTbody");
+  if (!tbody) return;
+  tbody.innerHTML = users.length ? users.map(u => {
+    const role = u.role === 'manager' ? 'manager' : 'rank_file';
+    const roleLabel = role === 'manager' ? 'Manager' : 'Rank & File';
+    const badge = role === 'manager' ? 'badge-info' : 'badge-secondary';
+    const uname = (u.username || '').replace(/'/g, "\'");
+    return `<tr>
+      <td>${u.username || '—'}</td>
+      <td>${u.name || '—'}</td>
+      <td><span class="badge ${badge}">${roleLabel}</span></td>
+      <td>${u.yvpId || '—'}</td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-primary btn-sm" onclick="editUserAccess('${u.id}','${uname}','${role}')">Edit Access</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteUserAccount('${u.id}','${uname}')">Delete</button>
+      </td>
+    </tr>`;
+  }).join('') : `<tr><td colspan="5" style="text-align:center;color:#999">No users found</td></tr>`;
+}
+
+function editUserAccess(uid, username, currentRole) {
+  if (!uid) { showToast('User not found', 'error'); return; }
+  document.getElementById('editAccessUid').value = uid;
+  document.getElementById('editAccessUsername').value = username || '';
+  document.getElementById('editAccessRole').value = currentRole === 'manager' ? 'manager' : 'rank_file';
+  document.getElementById('editAccessModal').classList.add('active');
+}
+
+async function saveUserAccess() {
+  const uid = document.getElementById('editAccessUid').value;
+  const newRole = document.getElementById('editAccessRole').value;
+  const username = document.getElementById('editAccessUsername').value;
+
+  if (!uid) { showToast('User not found', 'error'); return; }
+  if (username === 'admin' && newRole !== 'manager') {
+    showToast('Main admin must remain Manager', 'error');
+    return;
+  }
+
+  try {
+    await db.collection('users').doc(uid).update({
+      role: newRole,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    closeModal('editAccessModal');
+    loadUsers();
+    showToast('Access updated to ' + (newRole === 'manager' ? 'Manager' : 'Rank & File'));
+
+    // If editing current user, refresh sidebar
+    if (CU && (CU.uid === uid || CU.username === username)) {
+      CU.role = newRole;
+      const roleEl = document.getElementById('sbRole');
+      if (roleEl) roleEl.textContent = newRole === 'manager' ? 'Manager' : 'Rank & File';
+      buildSidebar(newRole);
+    }
+  } catch (e) {
+    console.error(e);
+    showToast('Failed to update access: ' + e.message, 'error');
+  }
+}
+
+
+async function updateSidebarPosition() {
+  const posEl = document.getElementById('sbPosition');
+  const nameEl = document.getElementById('sbName');
+  if (!CU) return;
+
+  // Name
+  let displayName = CU.name || CU.username || '—';
+  try {
+    if (CU.yvpId) {
+      // Prefer live employee record for name + position
+      let emp = (typeof cachedEmployees !== 'undefined' ? cachedEmployees : []).find(e => e.yvpId === CU.yvpId);
+      if (!emp) {
+        const doc = await db.collection('employees').doc(CU.yvpId).get();
+        if (doc.exists) emp = doc.data();
+      }
+      if (emp) {
+        const full = [emp.firstName, emp.middleName, emp.lastName].filter(Boolean).join(' ')
+                  || [emp.lastName, emp.firstName, emp.middleName].filter(Boolean).join(' ');
+        if (full) displayName = full;
+        if (nameEl) nameEl.textContent = displayName;
+        if (posEl) posEl.textContent = emp.position || (CU.role === 'manager' ? 'Manager' : 'Rank & File');
+        return;
+      }
+    }
+  } catch (e) { console.error(e); }
+
+  if (nameEl) nameEl.textContent = displayName;
+  if (posEl) posEl.textContent = CU.role === 'manager' ? 'Manager' : 'Rank & File';
 }
 
 </script>
