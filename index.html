@@ -95,6 +95,285 @@ function editAttendanceFromReport(logId, yvpId, name, date, timeIn, timeOut) {
   document.getElementById('editAttModal').classList.add('active');
 }
 
+
+// ── DEPARTMENTS & INVOICE ─────────────────────────────
+const DEFAULT_DEPARTMENTS = ['Twinacre Ventures LLC', 'Vandelay Real Estate'];
+
+async function loadDepartmentList() {
+  let depts = DEFAULT_DEPARTMENTS.slice();
+  try {
+    const snap = await getDb().collection('departments').get();
+    snap.docs.forEach(d => {
+      const n = d.data().name;
+      if (n && depts.indexOf(n) === -1) depts.push(n);
+    });
+  } catch (e) {}
+  // also from employees
+  (cachedEmployees || []).forEach(e => {
+    if (e.department && depts.indexOf(e.department) === -1) depts.push(e.department);
+  });
+  return depts;
+}
+
+async function loadDepartmentsIntoInvoice() {
+  const depts = await loadDepartmentList();
+  const sel = document.getElementById('invDepartment');
+  const fDept = document.getElementById('fDepartment');
+  if (sel) {
+    const cur = sel.value;
+    sel.innerHTML = depts.map(d => `<option value="${d}">${d}</option>`).join('');
+    if (cur && depts.indexOf(cur) >= 0) sel.value = cur;
+  }
+  if (fDept) {
+    const cur = fDept.value;
+    fDept.innerHTML = '<option value="">— Select —</option>' + depts.map(d => `<option value="${d}">${d}</option>`).join('');
+    if (cur) fDept.value = cur;
+  }
+  if (typeof refreshInvoiceAgents === "function") await refreshInvoiceAgents();
+}
+
+function showAddDepartment() {
+  document.getElementById('newDeptName').value = '';
+  document.getElementById('addDeptModal').classList.add('active');
+}
+
+async function saveNewDepartment() {
+  const name = (document.getElementById('newDeptName').value || '').trim();
+  if (!name) { showToast('Enter department name', 'error'); return; }
+  try {
+    await getDb().collection('departments').doc(name.replace(/\//g,'_')).set({
+      name,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    closeModal('addDeptModal');
+    await loadDepartmentsIntoInvoice();
+    const sel = document.getElementById('invDepartment');
+    if (sel) sel.value = name;
+    showToast('Department added');
+    refreshInvoiceAgents();
+  } catch (e) {
+    showToast('Failed to add department: ' + e.message, 'error');
+  }
+}
+
+async function generateInvoiceNumber() {
+  try {
+    const ref = getDb().collection('meta').doc('invoiceCounter');
+    const num = await getDb().runTransaction(async (tx) => {
+      const doc = await tx.get(ref);
+      let next = 1;
+      if (doc.exists && doc.data().last) next = (parseInt(doc.data().last, 10) || 0) + 1;
+      tx.set(ref, { last: next }, { merge: true });
+      return next;
+    });
+    const invNo = 'YVP-INV' + String(num).padStart(4, '0');
+    document.getElementById('invNumber').value = invNo;
+    if (typeof saveInvoiceToTracker === 'function') { saveInvoiceToTracker(); }
+    showToast('Invoice number: ' + invNo);
+  } catch (e) {
+    console.error(e);
+    // fallback local sequential in localStorage
+    let n = parseInt(localStorage.getItem('yvp_inv_counter') || '0', 10) + 1;
+    localStorage.setItem('yvp_inv_counter', String(n));
+    const invNo = 'YVP-INV' + String(n).padStart(4, '0');
+    document.getElementById('invNumber').value = invNo;
+    if (typeof saveInvoiceToTracker === 'function') { saveInvoiceToTracker(); }
+    showToast('Invoice number: ' + invNo + ' (local)');
+  }
+}
+
+async function refreshInvoiceAgents() {
+  const deptEl = document.getElementById('invDepartment');
+  const dept = (deptEl && deptEl.value) ? deptEl.value.trim() : '';
+  const fromDate = (document.getElementById('invFrom') || {}).value || '';
+  const toDate = (document.getElementById('invTo') || {}).value || '';
+  const label = document.getElementById('invDeptLabel');
+  if (label) label.textContent = dept || '—';
+  if (typeof applyInvoiceDefaultsByDepartment === 'function') applyInvoiceDefaultsByDepartment(dept);
+  const tbody = document.getElementById('invAgentsTbody');
+  if (!tbody) return;
+
+  let empsAll = (typeof cachedEmployees !== 'undefined' && cachedEmployees && cachedEmployees.length)
+    ? cachedEmployees.slice()
+    : [];
+  if (!empsAll.length) {
+    try {
+      const eSnap = await getDb().collection('employees').get();
+      empsAll = eSnap.docs.map(d => ({ id: d.id, ...d.data(), yvpId: d.data().yvpId || d.id }));
+      cachedEmployees = empsAll;
+    } catch (e) { console.error(e); }
+  }
+
+  const norm = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  const deptN = norm(dept);
+
+  let emps = empsAll.filter(e => {
+    const d = norm(e.department);
+    if (!d || !deptN) return false;
+    return d === deptN || d.indexOf(deptN) >= 0 || deptN.indexOf(d) >= 0;
+  });
+
+  const hoursMap = {};
+  try {
+    const aSnap = await getDb().collection('attendance').get();
+    aSnap.docs.forEach(d => {
+      const l = d.data();
+      if (!l.timeIn || !l.timeOut) return;
+      if (fromDate && l.date < fromDate) return;
+      if (toDate && l.date > toDate) return;
+      let hrs = parseFloat(l.totalHours) || 0;
+      if (hrs > 6) hrs = 6;
+      hoursMap[l.yvpId] = (hoursMap[l.yvpId] || 0) + hrs;
+    });
+  } catch (e) { console.error(e); }
+
+  let totalDue = 0;
+  window._invoiceRows = [];
+
+  if (!dept) {
+    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#999;padding:16px">Select a department</td></tr>';
+  } else if (!emps.length) {
+    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#c62828;padding:16px">No employees under <b>' + dept + '</b>.<br><span style="color:#666;font-size:12px">Go to Employees menu and set Department to this name, then return here.</span></td></tr>';
+  } else {
+    tbody.innerHTML = emps.map(e => {
+      const name = [e.firstName, e.middleName, e.lastName].filter(Boolean).join(' ')
+        || (typeof getEmployeeFullName === 'function' ? getEmployeeFullName(e.yvpId) : '')
+        || e.yvpId || '';
+      const hrs = Math.round((hoursMap[e.yvpId] || 0) * 100) / 100;
+      const rate = parseFloat(e.hourlyRate) || 0;
+      const total = hrs * rate;
+      totalDue += total;
+      window._invoiceRows.push({ name, hrs, rate, total, yvpId: e.yvpId });
+      const safeName = String(name).replace(/"/g, '&quot;');
+      return '<tr>'
+        + '<td><input type="text" class="inv-edit-name" value="' + safeName + '" style="width:100%;border:1px dashed #ccc;padding:4px 6px"/></td>'
+        + '<td><input type="number" class="inv-edit-hrs" value="' + hrs + '" step="0.01" style="width:90px;border:1px dashed #ccc;padding:4px 6px" oninput="recalcInvoiceRow(this)"/></td>'
+        + '<td><input type="number" class="inv-edit-rate" value="' + Math.round(rate) + '" step="1" style="width:90px;border:1px dashed #ccc;padding:4px 6px" oninput="recalcInvoiceRow(this)"/></td>'
+        + '<td><input type="text" class="inv-edit-total" value="$' + total.toFixed(2) + '" style="width:100px;border:1px dashed #ccc;padding:4px 6px"/></td>'
+        + '</tr>';
+    }).join('');
+  }
+
+  const dueEl = document.getElementById('invTotalDue');
+  if (dueEl) {
+    if (dueEl.tagName === 'INPUT') dueEl.value = '$' + totalDue.toFixed(2);
+    else dueEl.textContent = '$' + totalDue.toFixed(2);
+  }
+  window._invoiceTotalDue = totalDue;
+}
+
+
+
+function uploadInvoiceQr(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    const prev = document.getElementById('invQrPreview');
+    prev.innerHTML = '<img src="' + e.target.result + '" alt="QR" style="width:120px;height:160px;object-fit:cover;border:1px solid #ccc;border-radius:4px"/>';
+    window._invoiceQrDataUrl = e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+async function exportInvoiceExcel() {
+  if (typeof saveInvoiceToTracker === 'function') { try { await saveInvoiceToTracker(); } catch(e){} }
+
+  const dept = (document.getElementById('invDepartment') || {}).value || '';
+  const invNo = (document.getElementById('invNumber') || {}).value || '';
+  const client = (document.getElementById('invClientName') || {}).value || '';
+  const email = (document.getElementById('invClientEmail') || {}).value || '';
+  const fromDate = (document.getElementById('invFrom') || {}).value || '';
+  const toDate = (document.getElementById('invTo') || {}).value || '';
+  let rows = [];
+  document.querySelectorAll('#invAgentsTbody tr').forEach(tr => {
+    const name = tr.querySelector('.inv-edit-name')?.value || tr.cells[0]?.innerText || '';
+    const hrs = parseFloat(tr.querySelector('.inv-edit-hrs')?.value) || 0;
+    const rate = parseFloat(tr.querySelector('.inv-edit-rate')?.value) || 0;
+    const totalStr = (tr.querySelector('.inv-edit-total')?.value || '').replace(/[^0-9.\-]/g,'');
+    const total = parseFloat(totalStr) || (hrs * rate);
+    if (name) rows.push({ name, hrs, rate, total });
+  });
+  if (!rows.length) rows = window._invoiceRows || [];
+  const dueRaw = (document.getElementById('invTotalDue')?.value || document.getElementById('invTotalDue')?.textContent || '').replace(/[^0-9.\-]/g,'');
+  const totalDue = parseFloat(dueRaw) || window._invoiceTotalDue || 0;
+
+  const aoa = [
+    ['YVP Administrative Support Services'],
+    ['Phone: ' + ((document.getElementById('invPhone')||{}).value || ''), 'Email: ' + ((document.getElementById('invEmailFrom')||{}).value || '')],
+    [],
+    [(document.getElementById('invTitle')||{}).value || 'INVOICE'],
+    [],
+    ['NAME', client],
+    ['EMAIL', email],
+    ['Invoice No.', invNo],
+    ['Coverage From', fromDate, 'Coverage To', toDate],
+    ['Department', dept],
+    [],
+    ['Name', 'Hours Worked', 'Hourly Rate', 'Total'],
+    ...rows.map(r => [r.name, r.hrs, '$' + Math.round(r.rate), '$' + r.total.toFixed(2)]),
+    [],
+    ['TOTAL DUE', '', '', '$' + totalDue.toFixed(2)],
+    [],
+    ['Payment Instructions', (document.getElementById('invPayInstr')||{}).value || ''],
+    ['Bank Details', (document.getElementById('invBank')||{}).value || '']
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Invoice');
+  XLSX.writeFile(wb, (invNo || 'YVP_Invoice') + '.xlsx');
+  showToast('Invoice Excel downloaded');
+}
+
+
+
+
+
+
+function removeInvoiceQr() {
+  const prev = document.getElementById('invQrPreview');
+  if (prev) prev.innerHTML = '<span style="color:#999;font-size:13px">No QR code uploaded</span>';
+  window._invoiceQrDataUrl = null;
+  const f = document.getElementById('invQrFile');
+  if (f) f.value = '';
+  showToast('QR code removed');
+}
+
+function recalcInvoiceRow(el) {
+  try {
+    const tr = el.closest('tr');
+    if (!tr) return;
+    const hrs = parseFloat(tr.querySelector('.inv-edit-hrs')?.value) || 0;
+    const rate = parseFloat(tr.querySelector('.inv-edit-rate')?.value) || 0;
+    const total = hrs * rate;
+    const totEl = tr.querySelector('.inv-edit-total');
+    if (totEl) totEl.value = '$' + total.toFixed(2);
+    // sum all totals
+    let sum = 0;
+    document.querySelectorAll('#invAgentsTbody tr').forEach(row => {
+      const t = (row.querySelector('.inv-edit-total')?.value || '').replace(/[^0-9.\-]/g,'');
+      sum += parseFloat(t) || 0;
+    });
+    const dueEl = document.getElementById('invTotalDue');
+    if (dueEl) {
+      if (dueEl.tagName === 'INPUT') dueEl.value = '$' + sum.toFixed(2);
+      else dueEl.textContent = '$' + sum.toFixed(2);
+    }
+    window._invoiceTotalDue = sum;
+  } catch (e) { console.error(e); }
+}
+
+
+
+
+
+
+
+
+
+
+
+
 </script>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js">
 // ── ATTENDANCE HISTORY ────────────────────────────────
@@ -186,6 +465,255 @@ function editAttendanceFromReport(logId, yvpId, name, date, timeIn, timeOut) {
   document.getElementById('editAttTimeOut').value = (timeOut && timeOut !== '—') ? timeOut : '';
   document.getElementById('editAttModal').classList.add('active');
 }
+
+
+// ── DEPARTMENTS & INVOICE ─────────────────────────────
+const DEFAULT_DEPARTMENTS = ['Twinacre Ventures LLC', 'Vandelay Real Estate'];
+
+async function loadDepartmentList() {
+  let depts = DEFAULT_DEPARTMENTS.slice();
+  try {
+    const snap = await getDb().collection('departments').get();
+    snap.docs.forEach(d => {
+      const n = d.data().name;
+      if (n && depts.indexOf(n) === -1) depts.push(n);
+    });
+  } catch (e) {}
+  // also from employees
+  (cachedEmployees || []).forEach(e => {
+    if (e.department && depts.indexOf(e.department) === -1) depts.push(e.department);
+  });
+  return depts;
+}
+
+async function loadDepartmentsIntoInvoice() {
+  const depts = await loadDepartmentList();
+  const sel = document.getElementById('invDepartment');
+  const fDept = document.getElementById('fDepartment');
+  if (sel) {
+    const cur = sel.value;
+    sel.innerHTML = depts.map(d => `<option value="${d}">${d}</option>`).join('');
+    if (cur && depts.indexOf(cur) >= 0) sel.value = cur;
+  }
+  if (fDept) {
+    const cur = fDept.value;
+    fDept.innerHTML = '<option value="">— Select —</option>' + depts.map(d => `<option value="${d}">${d}</option>`).join('');
+    if (cur) fDept.value = cur;
+  }
+}
+
+function showAddDepartment() {
+  document.getElementById('newDeptName').value = '';
+  document.getElementById('addDeptModal').classList.add('active');
+}
+
+async function saveNewDepartment() {
+  const name = (document.getElementById('newDeptName').value || '').trim();
+  if (!name) { showToast('Enter department name', 'error'); return; }
+  try {
+    await getDb().collection('departments').doc(name.replace(/\//g,'_')).set({
+      name,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    closeModal('addDeptModal');
+    await loadDepartmentsIntoInvoice();
+    const sel = document.getElementById('invDepartment');
+    if (sel) sel.value = name;
+    showToast('Department added');
+    refreshInvoiceAgents();
+  } catch (e) {
+    showToast('Failed to add department: ' + e.message, 'error');
+  }
+}
+
+async function generateInvoiceNumber() {
+  try {
+    const ref = getDb().collection('meta').doc('invoiceCounter');
+    const num = await getDb().runTransaction(async (tx) => {
+      const doc = await tx.get(ref);
+      let next = 1;
+      if (doc.exists && doc.data().last) next = (parseInt(doc.data().last, 10) || 0) + 1;
+      tx.set(ref, { last: next }, { merge: true });
+      return next;
+    });
+    const invNo = 'YVP-INV' + String(num).padStart(4, '0');
+    document.getElementById('invNumber').value = invNo;
+    if (typeof saveInvoiceToTracker === 'function') { saveInvoiceToTracker(); }
+    showToast('Invoice number: ' + invNo);
+  } catch (e) {
+    console.error(e);
+    // fallback local sequential in localStorage
+    let n = parseInt(localStorage.getItem('yvp_inv_counter') || '0', 10) + 1;
+    localStorage.setItem('yvp_inv_counter', String(n));
+    const invNo = 'YVP-INV' + String(n).padStart(4, '0');
+    document.getElementById('invNumber').value = invNo;
+    if (typeof saveInvoiceToTracker === 'function') { saveInvoiceToTracker(); }
+    showToast('Invoice number: ' + invNo + ' (local)');
+  }
+}
+
+async function refreshInvoiceAgents() {
+  const dept = (document.getElementById('invDepartment') || {}).value || '';
+  const fromDate = (document.getElementById('invFrom') || {}).value || '';
+  const toDate = (document.getElementById('invTo') || {}).value || '';
+  const label = document.getElementById('invDeptLabel');
+  if (label) label.textContent = dept;
+  const tbody = document.getElementById('invAgentsTbody');
+  if (!tbody) return;
+
+  const emps = (cachedEmployees || []).filter(e => (e.department || '') === dept);
+  // hours from attendance
+  const aSnap = await getDb().collection('attendance').get();
+  const hoursMap = {};
+  aSnap.docs.forEach(d => {
+    const l = d.data();
+    if (!l.timeIn || !l.timeOut) return;
+    if (fromDate && l.date < fromDate) return;
+    if (toDate && l.date > toDate) return;
+    let hrs = parseFloat(l.totalHours) || 0;
+    if (hrs > 6) hrs = 6;
+    hoursMap[l.yvpId] = (hoursMap[l.yvpId] || 0) + hrs;
+  });
+
+  let totalDue = 0;
+  if (!emps.length) {
+    tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;color:#999">No employees in this department</td></tr>`;
+  } else {
+    tbody.innerHTML = emps.map(e => {
+      const name = [e.firstName, e.middleName, e.lastName].filter(Boolean).join(' ') || e.yvpId;
+      const hrs = Math.round((hoursMap[e.yvpId] || 0) * 100) / 100;
+      const rate = parseFloat(e.hourlyRate) || 0;
+      const total = hrs * rate;
+      totalDue += total;
+      return `<tr>
+        <td><input type="text" class="inv-edit-name" value="${name.replace(/"/g,'&quot;')}" style="width:100%;border:1px dashed #ccc;padding:4px 6px"/></td>
+        <td><input type="number" class="inv-edit-hrs" value="${hrs}" step="0.01" style="width:90px;border:1px dashed #ccc;padding:4px 6px" oninput="recalcInvoiceRow(this)"/></td>
+        <td><input type="number" class="inv-edit-rate" value="${Math.round(rate)}" step="1" style="width:90px;border:1px dashed #ccc;padding:4px 6px" oninput="recalcInvoiceRow(this)"/></td>
+        <td><input type="text" class="inv-edit-total" value="$${total.toFixed(2)}" style="width:100px;border:1px dashed #ccc;padding:4px 6px"/></td>
+      </tr>`;
+    }).join('');
+  }
+  const dueEl = document.getElementById('invTotalDue');
+  if (dueEl) {
+    if (dueEl.tagName === 'INPUT') dueEl.value = '$' + totalDue.toFixed(2);
+    else dueEl.textContent = '$' + totalDue.toFixed(2);
+  }
+  window._invoiceTotalDue = totalDue;
+  window._invoiceRows = emps.map(e => {
+    const name = [e.firstName, e.middleName, e.lastName].filter(Boolean).join(' ') || e.yvpId;
+    const hrs = Math.round((hoursMap[e.yvpId] || 0) * 100) / 100;
+    const rate = parseFloat(e.hourlyRate) || 0;
+    return { name, hrs, rate, total: hrs * rate };
+  });
+}
+
+function uploadInvoiceQr(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    const prev = document.getElementById('invQrPreview');
+    prev.innerHTML = '<img src="' + e.target.result + '" alt="QR" style="width:120px;height:160px;object-fit:cover;border:1px solid #ccc;border-radius:4px"/>';
+    window._invoiceQrDataUrl = e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+async function exportInvoiceExcel() {
+  if (typeof saveInvoiceToTracker === 'function') { try { await saveInvoiceToTracker(); } catch(e){} }
+
+  const dept = (document.getElementById('invDepartment') || {}).value || '';
+  const invNo = (document.getElementById('invNumber') || {}).value || '';
+  const client = (document.getElementById('invClientName') || {}).value || '';
+  const email = (document.getElementById('invClientEmail') || {}).value || '';
+  const fromDate = (document.getElementById('invFrom') || {}).value || '';
+  const toDate = (document.getElementById('invTo') || {}).value || '';
+  let rows = [];
+  document.querySelectorAll('#invAgentsTbody tr').forEach(tr => {
+    const name = tr.querySelector('.inv-edit-name')?.value || tr.cells[0]?.innerText || '';
+    const hrs = parseFloat(tr.querySelector('.inv-edit-hrs')?.value) || 0;
+    const rate = parseFloat(tr.querySelector('.inv-edit-rate')?.value) || 0;
+    const totalStr = (tr.querySelector('.inv-edit-total')?.value || '').replace(/[^0-9.\-]/g,'');
+    const total = parseFloat(totalStr) || (hrs * rate);
+    if (name) rows.push({ name, hrs, rate, total });
+  });
+  if (!rows.length) rows = window._invoiceRows || [];
+  const dueRaw = (document.getElementById('invTotalDue')?.value || document.getElementById('invTotalDue')?.textContent || '').replace(/[^0-9.\-]/g,'');
+  const totalDue = parseFloat(dueRaw) || window._invoiceTotalDue || 0;
+
+  const aoa = [
+    ['YVP Administrative Support Services'],
+    ['Phone: ' + ((document.getElementById('invPhone')||{}).value || ''), 'Email: ' + ((document.getElementById('invEmailFrom')||{}).value || '')],
+    [],
+    [(document.getElementById('invTitle')||{}).value || 'INVOICE'],
+    [],
+    ['NAME', client],
+    ['EMAIL', email],
+    ['Invoice No.', invNo],
+    ['Coverage From', fromDate, 'Coverage To', toDate],
+    ['Department', dept],
+    [],
+    ['Name', 'Hours Worked', 'Hourly Rate', 'Total'],
+    ...rows.map(r => [r.name, r.hrs, '$' + Math.round(r.rate), '$' + r.total.toFixed(2)]),
+    [],
+    ['TOTAL DUE', '', '', '$' + totalDue.toFixed(2)],
+    [],
+    ['Payment Instructions', (document.getElementById('invPayInstr')||{}).value || ''],
+    ['Bank Details', (document.getElementById('invBank')||{}).value || '']
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Invoice');
+  XLSX.writeFile(wb, (invNo || 'YVP_Invoice') + '.xlsx');
+  showToast('Invoice Excel downloaded');
+}
+
+
+
+
+function removeInvoiceQr() {
+  const prev = document.getElementById('invQrPreview');
+  if (prev) prev.innerHTML = '<span style="color:#999;font-size:13px">No QR code uploaded</span>';
+  window._invoiceQrDataUrl = null;
+  const f = document.getElementById('invQrFile');
+  if (f) f.value = '';
+  showToast('QR code removed');
+}
+
+function recalcInvoiceRow(el) {
+  try {
+    const tr = el.closest('tr');
+    if (!tr) return;
+    const hrs = parseFloat(tr.querySelector('.inv-edit-hrs')?.value) || 0;
+    const rate = parseFloat(tr.querySelector('.inv-edit-rate')?.value) || 0;
+    const total = hrs * rate;
+    const totEl = tr.querySelector('.inv-edit-total');
+    if (totEl) totEl.value = '$' + total.toFixed(2);
+    // sum all totals
+    let sum = 0;
+    document.querySelectorAll('#invAgentsTbody tr').forEach(row => {
+      const t = (row.querySelector('.inv-edit-total')?.value || '').replace(/[^0-9.\-]/g,'');
+      sum += parseFloat(t) || 0;
+    });
+    const dueEl = document.getElementById('invTotalDue');
+    if (dueEl) {
+      if (dueEl.tagName === 'INPUT') dueEl.value = '$' + sum.toFixed(2);
+      else dueEl.textContent = '$' + sum.toFixed(2);
+    }
+    window._invoiceTotalDue = sum;
+  } catch (e) { console.error(e); }
+}
+
+
+
+
+
+
+
+
+
+
+
 
 </script>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js">
@@ -279,6 +807,255 @@ function editAttendanceFromReport(logId, yvpId, name, date, timeIn, timeOut) {
   document.getElementById('editAttModal').classList.add('active');
 }
 
+
+// ── DEPARTMENTS & INVOICE ─────────────────────────────
+const DEFAULT_DEPARTMENTS = ['Twinacre Ventures LLC', 'Vandelay Real Estate'];
+
+async function loadDepartmentList() {
+  let depts = DEFAULT_DEPARTMENTS.slice();
+  try {
+    const snap = await getDb().collection('departments').get();
+    snap.docs.forEach(d => {
+      const n = d.data().name;
+      if (n && depts.indexOf(n) === -1) depts.push(n);
+    });
+  } catch (e) {}
+  // also from employees
+  (cachedEmployees || []).forEach(e => {
+    if (e.department && depts.indexOf(e.department) === -1) depts.push(e.department);
+  });
+  return depts;
+}
+
+async function loadDepartmentsIntoInvoice() {
+  const depts = await loadDepartmentList();
+  const sel = document.getElementById('invDepartment');
+  const fDept = document.getElementById('fDepartment');
+  if (sel) {
+    const cur = sel.value;
+    sel.innerHTML = depts.map(d => `<option value="${d}">${d}</option>`).join('');
+    if (cur && depts.indexOf(cur) >= 0) sel.value = cur;
+  }
+  if (fDept) {
+    const cur = fDept.value;
+    fDept.innerHTML = '<option value="">— Select —</option>' + depts.map(d => `<option value="${d}">${d}</option>`).join('');
+    if (cur) fDept.value = cur;
+  }
+}
+
+function showAddDepartment() {
+  document.getElementById('newDeptName').value = '';
+  document.getElementById('addDeptModal').classList.add('active');
+}
+
+async function saveNewDepartment() {
+  const name = (document.getElementById('newDeptName').value || '').trim();
+  if (!name) { showToast('Enter department name', 'error'); return; }
+  try {
+    await getDb().collection('departments').doc(name.replace(/\//g,'_')).set({
+      name,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    closeModal('addDeptModal');
+    await loadDepartmentsIntoInvoice();
+    const sel = document.getElementById('invDepartment');
+    if (sel) sel.value = name;
+    showToast('Department added');
+    refreshInvoiceAgents();
+  } catch (e) {
+    showToast('Failed to add department: ' + e.message, 'error');
+  }
+}
+
+async function generateInvoiceNumber() {
+  try {
+    const ref = getDb().collection('meta').doc('invoiceCounter');
+    const num = await getDb().runTransaction(async (tx) => {
+      const doc = await tx.get(ref);
+      let next = 1;
+      if (doc.exists && doc.data().last) next = (parseInt(doc.data().last, 10) || 0) + 1;
+      tx.set(ref, { last: next }, { merge: true });
+      return next;
+    });
+    const invNo = 'YVP-INV' + String(num).padStart(4, '0');
+    document.getElementById('invNumber').value = invNo;
+    if (typeof saveInvoiceToTracker === 'function') { saveInvoiceToTracker(); }
+    showToast('Invoice number: ' + invNo);
+  } catch (e) {
+    console.error(e);
+    // fallback local sequential in localStorage
+    let n = parseInt(localStorage.getItem('yvp_inv_counter') || '0', 10) + 1;
+    localStorage.setItem('yvp_inv_counter', String(n));
+    const invNo = 'YVP-INV' + String(n).padStart(4, '0');
+    document.getElementById('invNumber').value = invNo;
+    if (typeof saveInvoiceToTracker === 'function') { saveInvoiceToTracker(); }
+    showToast('Invoice number: ' + invNo + ' (local)');
+  }
+}
+
+async function refreshInvoiceAgents() {
+  const dept = (document.getElementById('invDepartment') || {}).value || '';
+  const fromDate = (document.getElementById('invFrom') || {}).value || '';
+  const toDate = (document.getElementById('invTo') || {}).value || '';
+  const label = document.getElementById('invDeptLabel');
+  if (label) label.textContent = dept;
+  const tbody = document.getElementById('invAgentsTbody');
+  if (!tbody) return;
+
+  const emps = (cachedEmployees || []).filter(e => (e.department || '') === dept);
+  // hours from attendance
+  const aSnap = await getDb().collection('attendance').get();
+  const hoursMap = {};
+  aSnap.docs.forEach(d => {
+    const l = d.data();
+    if (!l.timeIn || !l.timeOut) return;
+    if (fromDate && l.date < fromDate) return;
+    if (toDate && l.date > toDate) return;
+    let hrs = parseFloat(l.totalHours) || 0;
+    if (hrs > 6) hrs = 6;
+    hoursMap[l.yvpId] = (hoursMap[l.yvpId] || 0) + hrs;
+  });
+
+  let totalDue = 0;
+  if (!emps.length) {
+    tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;color:#999">No employees in this department</td></tr>`;
+  } else {
+    tbody.innerHTML = emps.map(e => {
+      const name = [e.firstName, e.middleName, e.lastName].filter(Boolean).join(' ') || e.yvpId;
+      const hrs = Math.round((hoursMap[e.yvpId] || 0) * 100) / 100;
+      const rate = parseFloat(e.hourlyRate) || 0;
+      const total = hrs * rate;
+      totalDue += total;
+      return `<tr>
+        <td><input type="text" class="inv-edit-name" value="${name.replace(/"/g,'&quot;')}" style="width:100%;border:1px dashed #ccc;padding:4px 6px"/></td>
+        <td><input type="number" class="inv-edit-hrs" value="${hrs}" step="0.01" style="width:90px;border:1px dashed #ccc;padding:4px 6px" oninput="recalcInvoiceRow(this)"/></td>
+        <td><input type="number" class="inv-edit-rate" value="${Math.round(rate)}" step="1" style="width:90px;border:1px dashed #ccc;padding:4px 6px" oninput="recalcInvoiceRow(this)"/></td>
+        <td><input type="text" class="inv-edit-total" value="$${total.toFixed(2)}" style="width:100px;border:1px dashed #ccc;padding:4px 6px"/></td>
+      </tr>`;
+    }).join('');
+  }
+  const dueEl = document.getElementById('invTotalDue');
+  if (dueEl) {
+    if (dueEl.tagName === 'INPUT') dueEl.value = '$' + totalDue.toFixed(2);
+    else dueEl.textContent = '$' + totalDue.toFixed(2);
+  }
+  window._invoiceTotalDue = totalDue;
+  window._invoiceRows = emps.map(e => {
+    const name = [e.firstName, e.middleName, e.lastName].filter(Boolean).join(' ') || e.yvpId;
+    const hrs = Math.round((hoursMap[e.yvpId] || 0) * 100) / 100;
+    const rate = parseFloat(e.hourlyRate) || 0;
+    return { name, hrs, rate, total: hrs * rate };
+  });
+}
+
+function uploadInvoiceQr(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    const prev = document.getElementById('invQrPreview');
+    prev.innerHTML = '<img src="' + e.target.result + '" alt="QR" style="width:120px;height:160px;object-fit:cover;border:1px solid #ccc;border-radius:4px"/>';
+    window._invoiceQrDataUrl = e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+async function exportInvoiceExcel() {
+  if (typeof saveInvoiceToTracker === 'function') { try { await saveInvoiceToTracker(); } catch(e){} }
+
+  const dept = (document.getElementById('invDepartment') || {}).value || '';
+  const invNo = (document.getElementById('invNumber') || {}).value || '';
+  const client = (document.getElementById('invClientName') || {}).value || '';
+  const email = (document.getElementById('invClientEmail') || {}).value || '';
+  const fromDate = (document.getElementById('invFrom') || {}).value || '';
+  const toDate = (document.getElementById('invTo') || {}).value || '';
+  let rows = [];
+  document.querySelectorAll('#invAgentsTbody tr').forEach(tr => {
+    const name = tr.querySelector('.inv-edit-name')?.value || tr.cells[0]?.innerText || '';
+    const hrs = parseFloat(tr.querySelector('.inv-edit-hrs')?.value) || 0;
+    const rate = parseFloat(tr.querySelector('.inv-edit-rate')?.value) || 0;
+    const totalStr = (tr.querySelector('.inv-edit-total')?.value || '').replace(/[^0-9.\-]/g,'');
+    const total = parseFloat(totalStr) || (hrs * rate);
+    if (name) rows.push({ name, hrs, rate, total });
+  });
+  if (!rows.length) rows = window._invoiceRows || [];
+  const dueRaw = (document.getElementById('invTotalDue')?.value || document.getElementById('invTotalDue')?.textContent || '').replace(/[^0-9.\-]/g,'');
+  const totalDue = parseFloat(dueRaw) || window._invoiceTotalDue || 0;
+
+  const aoa = [
+    ['YVP Administrative Support Services'],
+    ['Phone: ' + ((document.getElementById('invPhone')||{}).value || ''), 'Email: ' + ((document.getElementById('invEmailFrom')||{}).value || '')],
+    [],
+    [(document.getElementById('invTitle')||{}).value || 'INVOICE'],
+    [],
+    ['NAME', client],
+    ['EMAIL', email],
+    ['Invoice No.', invNo],
+    ['Coverage From', fromDate, 'Coverage To', toDate],
+    ['Department', dept],
+    [],
+    ['Name', 'Hours Worked', 'Hourly Rate', 'Total'],
+    ...rows.map(r => [r.name, r.hrs, '$' + Math.round(r.rate), '$' + r.total.toFixed(2)]),
+    [],
+    ['TOTAL DUE', '', '', '$' + totalDue.toFixed(2)],
+    [],
+    ['Payment Instructions', (document.getElementById('invPayInstr')||{}).value || ''],
+    ['Bank Details', (document.getElementById('invBank')||{}).value || '']
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Invoice');
+  XLSX.writeFile(wb, (invNo || 'YVP_Invoice') + '.xlsx');
+  showToast('Invoice Excel downloaded');
+}
+
+
+
+
+function removeInvoiceQr() {
+  const prev = document.getElementById('invQrPreview');
+  if (prev) prev.innerHTML = '<span style="color:#999;font-size:13px">No QR code uploaded</span>';
+  window._invoiceQrDataUrl = null;
+  const f = document.getElementById('invQrFile');
+  if (f) f.value = '';
+  showToast('QR code removed');
+}
+
+function recalcInvoiceRow(el) {
+  try {
+    const tr = el.closest('tr');
+    if (!tr) return;
+    const hrs = parseFloat(tr.querySelector('.inv-edit-hrs')?.value) || 0;
+    const rate = parseFloat(tr.querySelector('.inv-edit-rate')?.value) || 0;
+    const total = hrs * rate;
+    const totEl = tr.querySelector('.inv-edit-total');
+    if (totEl) totEl.value = '$' + total.toFixed(2);
+    // sum all totals
+    let sum = 0;
+    document.querySelectorAll('#invAgentsTbody tr').forEach(row => {
+      const t = (row.querySelector('.inv-edit-total')?.value || '').replace(/[^0-9.\-]/g,'');
+      sum += parseFloat(t) || 0;
+    });
+    const dueEl = document.getElementById('invTotalDue');
+    if (dueEl) {
+      if (dueEl.tagName === 'INPUT') dueEl.value = '$' + sum.toFixed(2);
+      else dueEl.textContent = '$' + sum.toFixed(2);
+    }
+    window._invoiceTotalDue = sum;
+  } catch (e) { console.error(e); }
+}
+
+
+
+
+
+
+
+
+
+
+
+
 </script>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js">
 // ── ATTENDANCE HISTORY ────────────────────────────────
@@ -370,6 +1147,255 @@ function editAttendanceFromReport(logId, yvpId, name, date, timeIn, timeOut) {
   document.getElementById('editAttTimeOut').value = (timeOut && timeOut !== '—') ? timeOut : '';
   document.getElementById('editAttModal').classList.add('active');
 }
+
+
+// ── DEPARTMENTS & INVOICE ─────────────────────────────
+const DEFAULT_DEPARTMENTS = ['Twinacre Ventures LLC', 'Vandelay Real Estate'];
+
+async function loadDepartmentList() {
+  let depts = DEFAULT_DEPARTMENTS.slice();
+  try {
+    const snap = await getDb().collection('departments').get();
+    snap.docs.forEach(d => {
+      const n = d.data().name;
+      if (n && depts.indexOf(n) === -1) depts.push(n);
+    });
+  } catch (e) {}
+  // also from employees
+  (cachedEmployees || []).forEach(e => {
+    if (e.department && depts.indexOf(e.department) === -1) depts.push(e.department);
+  });
+  return depts;
+}
+
+async function loadDepartmentsIntoInvoice() {
+  const depts = await loadDepartmentList();
+  const sel = document.getElementById('invDepartment');
+  const fDept = document.getElementById('fDepartment');
+  if (sel) {
+    const cur = sel.value;
+    sel.innerHTML = depts.map(d => `<option value="${d}">${d}</option>`).join('');
+    if (cur && depts.indexOf(cur) >= 0) sel.value = cur;
+  }
+  if (fDept) {
+    const cur = fDept.value;
+    fDept.innerHTML = '<option value="">— Select —</option>' + depts.map(d => `<option value="${d}">${d}</option>`).join('');
+    if (cur) fDept.value = cur;
+  }
+}
+
+function showAddDepartment() {
+  document.getElementById('newDeptName').value = '';
+  document.getElementById('addDeptModal').classList.add('active');
+}
+
+async function saveNewDepartment() {
+  const name = (document.getElementById('newDeptName').value || '').trim();
+  if (!name) { showToast('Enter department name', 'error'); return; }
+  try {
+    await getDb().collection('departments').doc(name.replace(/\//g,'_')).set({
+      name,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    closeModal('addDeptModal');
+    await loadDepartmentsIntoInvoice();
+    const sel = document.getElementById('invDepartment');
+    if (sel) sel.value = name;
+    showToast('Department added');
+    refreshInvoiceAgents();
+  } catch (e) {
+    showToast('Failed to add department: ' + e.message, 'error');
+  }
+}
+
+async function generateInvoiceNumber() {
+  try {
+    const ref = getDb().collection('meta').doc('invoiceCounter');
+    const num = await getDb().runTransaction(async (tx) => {
+      const doc = await tx.get(ref);
+      let next = 1;
+      if (doc.exists && doc.data().last) next = (parseInt(doc.data().last, 10) || 0) + 1;
+      tx.set(ref, { last: next }, { merge: true });
+      return next;
+    });
+    const invNo = 'YVP-INV' + String(num).padStart(4, '0');
+    document.getElementById('invNumber').value = invNo;
+    if (typeof saveInvoiceToTracker === 'function') { saveInvoiceToTracker(); }
+    showToast('Invoice number: ' + invNo);
+  } catch (e) {
+    console.error(e);
+    // fallback local sequential in localStorage
+    let n = parseInt(localStorage.getItem('yvp_inv_counter') || '0', 10) + 1;
+    localStorage.setItem('yvp_inv_counter', String(n));
+    const invNo = 'YVP-INV' + String(n).padStart(4, '0');
+    document.getElementById('invNumber').value = invNo;
+    if (typeof saveInvoiceToTracker === 'function') { saveInvoiceToTracker(); }
+    showToast('Invoice number: ' + invNo + ' (local)');
+  }
+}
+
+async function refreshInvoiceAgents() {
+  const dept = (document.getElementById('invDepartment') || {}).value || '';
+  const fromDate = (document.getElementById('invFrom') || {}).value || '';
+  const toDate = (document.getElementById('invTo') || {}).value || '';
+  const label = document.getElementById('invDeptLabel');
+  if (label) label.textContent = dept;
+  const tbody = document.getElementById('invAgentsTbody');
+  if (!tbody) return;
+
+  const emps = (cachedEmployees || []).filter(e => (e.department || '') === dept);
+  // hours from attendance
+  const aSnap = await getDb().collection('attendance').get();
+  const hoursMap = {};
+  aSnap.docs.forEach(d => {
+    const l = d.data();
+    if (!l.timeIn || !l.timeOut) return;
+    if (fromDate && l.date < fromDate) return;
+    if (toDate && l.date > toDate) return;
+    let hrs = parseFloat(l.totalHours) || 0;
+    if (hrs > 6) hrs = 6;
+    hoursMap[l.yvpId] = (hoursMap[l.yvpId] || 0) + hrs;
+  });
+
+  let totalDue = 0;
+  if (!emps.length) {
+    tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;color:#999">No employees in this department</td></tr>`;
+  } else {
+    tbody.innerHTML = emps.map(e => {
+      const name = [e.firstName, e.middleName, e.lastName].filter(Boolean).join(' ') || e.yvpId;
+      const hrs = Math.round((hoursMap[e.yvpId] || 0) * 100) / 100;
+      const rate = parseFloat(e.hourlyRate) || 0;
+      const total = hrs * rate;
+      totalDue += total;
+      return `<tr>
+        <td><input type="text" class="inv-edit-name" value="${name.replace(/"/g,'&quot;')}" style="width:100%;border:1px dashed #ccc;padding:4px 6px"/></td>
+        <td><input type="number" class="inv-edit-hrs" value="${hrs}" step="0.01" style="width:90px;border:1px dashed #ccc;padding:4px 6px" oninput="recalcInvoiceRow(this)"/></td>
+        <td><input type="number" class="inv-edit-rate" value="${Math.round(rate)}" step="1" style="width:90px;border:1px dashed #ccc;padding:4px 6px" oninput="recalcInvoiceRow(this)"/></td>
+        <td><input type="text" class="inv-edit-total" value="$${total.toFixed(2)}" style="width:100px;border:1px dashed #ccc;padding:4px 6px"/></td>
+      </tr>`;
+    }).join('');
+  }
+  const dueEl = document.getElementById('invTotalDue');
+  if (dueEl) {
+    if (dueEl.tagName === 'INPUT') dueEl.value = '$' + totalDue.toFixed(2);
+    else dueEl.textContent = '$' + totalDue.toFixed(2);
+  }
+  window._invoiceTotalDue = totalDue;
+  window._invoiceRows = emps.map(e => {
+    const name = [e.firstName, e.middleName, e.lastName].filter(Boolean).join(' ') || e.yvpId;
+    const hrs = Math.round((hoursMap[e.yvpId] || 0) * 100) / 100;
+    const rate = parseFloat(e.hourlyRate) || 0;
+    return { name, hrs, rate, total: hrs * rate };
+  });
+}
+
+function uploadInvoiceQr(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    const prev = document.getElementById('invQrPreview');
+    prev.innerHTML = '<img src="' + e.target.result + '" alt="QR" style="width:120px;height:160px;object-fit:cover;border:1px solid #ccc;border-radius:4px"/>';
+    window._invoiceQrDataUrl = e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+async function exportInvoiceExcel() {
+  if (typeof saveInvoiceToTracker === 'function') { try { await saveInvoiceToTracker(); } catch(e){} }
+
+  const dept = (document.getElementById('invDepartment') || {}).value || '';
+  const invNo = (document.getElementById('invNumber') || {}).value || '';
+  const client = (document.getElementById('invClientName') || {}).value || '';
+  const email = (document.getElementById('invClientEmail') || {}).value || '';
+  const fromDate = (document.getElementById('invFrom') || {}).value || '';
+  const toDate = (document.getElementById('invTo') || {}).value || '';
+  let rows = [];
+  document.querySelectorAll('#invAgentsTbody tr').forEach(tr => {
+    const name = tr.querySelector('.inv-edit-name')?.value || tr.cells[0]?.innerText || '';
+    const hrs = parseFloat(tr.querySelector('.inv-edit-hrs')?.value) || 0;
+    const rate = parseFloat(tr.querySelector('.inv-edit-rate')?.value) || 0;
+    const totalStr = (tr.querySelector('.inv-edit-total')?.value || '').replace(/[^0-9.\-]/g,'');
+    const total = parseFloat(totalStr) || (hrs * rate);
+    if (name) rows.push({ name, hrs, rate, total });
+  });
+  if (!rows.length) rows = window._invoiceRows || [];
+  const dueRaw = (document.getElementById('invTotalDue')?.value || document.getElementById('invTotalDue')?.textContent || '').replace(/[^0-9.\-]/g,'');
+  const totalDue = parseFloat(dueRaw) || window._invoiceTotalDue || 0;
+
+  const aoa = [
+    ['YVP Administrative Support Services'],
+    ['Phone: ' + ((document.getElementById('invPhone')||{}).value || ''), 'Email: ' + ((document.getElementById('invEmailFrom')||{}).value || '')],
+    [],
+    [(document.getElementById('invTitle')||{}).value || 'INVOICE'],
+    [],
+    ['NAME', client],
+    ['EMAIL', email],
+    ['Invoice No.', invNo],
+    ['Coverage From', fromDate, 'Coverage To', toDate],
+    ['Department', dept],
+    [],
+    ['Name', 'Hours Worked', 'Hourly Rate', 'Total'],
+    ...rows.map(r => [r.name, r.hrs, '$' + Math.round(r.rate), '$' + r.total.toFixed(2)]),
+    [],
+    ['TOTAL DUE', '', '', '$' + totalDue.toFixed(2)],
+    [],
+    ['Payment Instructions', (document.getElementById('invPayInstr')||{}).value || ''],
+    ['Bank Details', (document.getElementById('invBank')||{}).value || '']
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Invoice');
+  XLSX.writeFile(wb, (invNo || 'YVP_Invoice') + '.xlsx');
+  showToast('Invoice Excel downloaded');
+}
+
+
+
+
+function removeInvoiceQr() {
+  const prev = document.getElementById('invQrPreview');
+  if (prev) prev.innerHTML = '<span style="color:#999;font-size:13px">No QR code uploaded</span>';
+  window._invoiceQrDataUrl = null;
+  const f = document.getElementById('invQrFile');
+  if (f) f.value = '';
+  showToast('QR code removed');
+}
+
+function recalcInvoiceRow(el) {
+  try {
+    const tr = el.closest('tr');
+    if (!tr) return;
+    const hrs = parseFloat(tr.querySelector('.inv-edit-hrs')?.value) || 0;
+    const rate = parseFloat(tr.querySelector('.inv-edit-rate')?.value) || 0;
+    const total = hrs * rate;
+    const totEl = tr.querySelector('.inv-edit-total');
+    if (totEl) totEl.value = '$' + total.toFixed(2);
+    // sum all totals
+    let sum = 0;
+    document.querySelectorAll('#invAgentsTbody tr').forEach(row => {
+      const t = (row.querySelector('.inv-edit-total')?.value || '').replace(/[^0-9.\-]/g,'');
+      sum += parseFloat(t) || 0;
+    });
+    const dueEl = document.getElementById('invTotalDue');
+    if (dueEl) {
+      if (dueEl.tagName === 'INPUT') dueEl.value = '$' + sum.toFixed(2);
+      else dueEl.textContent = '$' + sum.toFixed(2);
+    }
+    window._invoiceTotalDue = sum;
+  } catch (e) { console.error(e); }
+}
+
+
+
+
+
+
+
+
+
+
+
 
 </script>
 <style>
@@ -593,6 +1619,22 @@ tbody td{padding:10px 12px;border-bottom:1px solid #eee}
   </div>
 </div>
 
+
+<div class="modal-overlay" id="addDeptModal">
+  <div class="modal-box" style="max-width:400px;text-align:left">
+    <button class="modal-close" onclick="closeModal('addDeptModal')">✕</button>
+    <h3 style="color:#1a237e;margin-bottom:12px">➕ Add Department</h3>
+    <div class="form-group">
+      <label>Department Name *</label>
+      <input type="text" id="newDeptName" placeholder="Department name"/>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('addDeptModal')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveNewDepartment()">💾 Save</button>
+    </div>
+  </div>
+</div>
+
 <!-- LOGIN -->
 <div id="loginScreen">
   <div class="login-card">
@@ -682,7 +1724,7 @@ tbody td{padding:10px 12px;border-bottom:1px solid #eee}
         <div class="upload-zone" onclick="document.getElementById('empFile').click()">
           <div style="font-size:36px;margin-bottom:8px">📂</div>
           <p><b>Click to upload Excel file</b></p>
-          <small style="color:#999">Columns: YVP ID | Last Name | First Name | Middle Name | Position | Hourly Rate | Birthday | Address | Email | Contact</small>
+          <small style="color:#999">Columns: YVP ID | Last Name | First Name | Middle Name | Position | Department | Hourly Rate | Birthday | Address | Email | Contact</small>
         </div>
         <input type="file" id="empFile" accept=".xlsx,.xls" style="display:none" onchange="handleEmpUpload(event)"/>
         <div style="display:flex;gap:10px;margin-top:8px;flex-wrap:wrap">
@@ -704,7 +1746,7 @@ tbody td{padding:10px 12px;border-bottom:1px solid #eee}
           <table>
             <thead><tr>
               <th>YVP ID</th><th>Full Name</th><th>Last Name</th><th>First Name</th><th>Middle Name</th>
-              <th>Position</th><th>Hourly Rate</th><th>Birthday</th><th>Address</th>
+              <th>Position</th><th>Department</th><th>Hourly Rate</th><th>Birthday</th><th>Address</th>
               <th>Email</th><th>Contact</th><th>Actions</th>
             </tr></thead>
             <tbody id="empTbody"></tbody>
@@ -723,6 +1765,13 @@ tbody td{padding:10px 12px;border-bottom:1px solid #eee}
         </div>
         <div class="form-row">
           <div class="form-group"><label>Position</label><input type="text" id="fPosition"/></div>
+          <div class="form-group"><label>Department</label>
+            <select id="fDepartment">
+              <option value="">— Select —</option>
+              <option value="Twinacre Ventures LLC">Twinacre Ventures LLC</option>
+              <option value="Vandelay Real Estate">Vandelay Real Estate</option>
+            </select>
+          </div>
           <div class="form-group"><label>Hourly Rate ($)</label><input type="number" id="fRate" step="0.01"/></div>
         </div>
         <div class="form-row">
@@ -831,7 +1880,7 @@ tbody td{padding:10px 12px;border-bottom:1px solid #eee}
         <div class="table-wrapper">
           <table>
             <thead><tr>
-              <th>YVP ID</th><th>Name</th><th>Total Hours</th><th>Hourly Rate</th><th>Total Billing (USD)</th>
+              <th>YVP ID</th><th>Name</th><th>Department</th><th>Total Hours</th><th>Hourly Rate</th><th>Total Billing (USD)</th>
             </tr></thead>
             <tbody id="payrollTbody"></tbody>
           </table>
@@ -894,7 +1943,148 @@ tbody td{padding:10px 12px;border-bottom:1px solid #eee}
         </div>
       </div>
     </section>
-  </main>
+  
+    <!-- INVOICE -->
+    <section class="page-section" id="sec-invoice">
+      <div class="page-header"><h2>🧾 Invoice</h2><p>Generate department invoices</p></div>
+      <div class="card">
+        <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;margin-bottom:16px">
+          <div class="form-group" style="min-width:220px">
+            <label>Department</label>
+            <select id="invDepartment" onchange="applyInvoiceDefaultsByDepartment(this.value); refreshInvoiceAgents()">
+              <option value="Twinacre Ventures LLC">Twinacre Ventures LLC</option>
+              <option value="Vandelay Real Estate">Vandelay Real Estate</option>
+            </select>
+          </div>
+          <button class="btn btn-secondary" type="button" onclick="showAddDepartment()">➕ Add Department</button>
+          <button class="btn btn-success" type="button" onclick="exportInvoiceExcel()">⬇️ Extract Excel</button>
+          <button class="btn btn-primary" type="button" onclick="exportInvoicePdf()">⬇️ Extract PDF</button>
+          <button class="btn btn-warning" type="button" onclick="showSection('invoiceTracker')" style="margin-left:auto">📋 INVOICE Tracker</button>
+        </div>
+
+        <div id="invoicePreview" style="background:#fff;border:1px solid #ddd;border-radius:12px;padding:28px;max-width:900px;margin:0 auto;color:#222">
+          <div style="text-align:center;margin-bottom:8px">
+            <div style="font-size:18px;font-weight:800;color:#1a237e">YVP Administrative Support Services</div>
+            <div style="font-size:12px;color:#555;margin-top:6px">
+              Phone: <input id="invPhone" value="+19106726372" style="border:1px dashed #ccc;padding:2px 6px;width:140px;font-size:12px"/>
+              &nbsp;|&nbsp; Email:
+              <input id="invEmailFrom" value="yourvirtualjanny@gmail.com" style="border:1px dashed #ccc;padding:2px 6px;width:200px;font-size:12px"/>
+            </div>
+          </div>
+          <hr style="margin:14px 0;border:none;border-top:2px solid #1a237e"/>
+          <div style="text-align:center;margin-bottom:16px">
+            <input id="invTitle" value="INVOICE" style="border:none;text-align:center;font-size:28px;font-weight:800;color:#1a237e;width:100%;letter-spacing:2px"/>
+          </div>
+          <div style="font-weight:800;color:#1a237e;margin:8px 0 6px;font-size:14px;letter-spacing:0.5px">BILL TO:</div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>NAME</label>
+              <input type="text" id="invClientName" placeholder="Client / Company name"/>
+            </div>
+            <div class="form-group">
+              <label>EMAIL</label>
+              <input type="email" id="invClientEmail" placeholder="client@email.com"/>
+            </div>
+          </div>
+          <h4 style="margin:18px 0 10px;color:#1a237e">INVOICE DETAILS</h4>
+          <div class="form-row" style="align-items:flex-end">
+            <div class="form-group">
+              <label>Invoice No.</label>
+              <div style="display:flex;gap:8px">
+                <input type="text" id="invNumber" readonly style="background:#f5f5f5;font-weight:700" placeholder="Click Generate"/>
+                <button class="btn btn-warning" type="button" onclick="generateInvoiceNumber()">GENERATE INVOICE</button>
+              </div>
+            </div>
+            <div class="form-group">
+              <label>Coverage From</label>
+              <input type="date" id="invFrom" onchange="refreshInvoiceAgents()"/>
+            </div>
+            <div class="form-group">
+              <label>Coverage To</label>
+              <input type="date" id="invTo" onchange="refreshInvoiceAgents()"/>
+            </div>
+          </div>
+
+          <h4 style="margin:18px 0 10px;color:#1a237e">Real Estate VAs — <span id="invDeptLabel">Twinacre Ventures LLC</span></h4>
+          <div class="table-wrapper">
+            <table>
+              <thead><tr><th>Name</th><th>Hours Worked</th><th>Hourly Rate</th><th>Total</th></tr></thead>
+              <tbody id="invAgentsTbody"></tbody>
+              <tfoot>
+                <tr>
+                  <td colspan="3" style="text-align:right;font-weight:700;padding-right:24px">TOTAL DUE</td>
+                  <td style="font-weight:800;color:#1a237e">
+                    <input type="text" id="invTotalDue" value="$0.00" style="width:120px;font-weight:800;color:#1a237e;border:1px dashed #ccc;padding:6px 8px;text-align:right"/>
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+          <p style="font-size:12px;color:#777;margin-top:6px">Tip: Name, Hours, Rate, Total, and TOTAL DUE are editable.</p>
+
+          <div class="form-group" style="margin-top:16px">
+            <label>Payment Instructions</label>
+            <textarea id="invPayInstr" rows="3" style="width:100%;padding:10px;border-radius:8px;border:1px solid #ccc">Please send payment via my WISE Account
+Wise: https://wise.com/pay/r/i3fIn-TuX7dU9io</textarea>
+          </div>
+          <div class="form-group">
+            <label>Bank Details</label>
+            <textarea id="invBank" rows="4" style="width:100%;padding:10px;border-radius:8px;border:1px solid #ccc">Account Name: JAN ADRIAN ALOBA BAUTISTA
+Account Number: 2003095900
+Bank Code: 01828-001-6
+Bank Name: Wise Pilipinas Inc.</textarea>
+          </div>
+
+          <div style="margin-top:18px;text-align:center">
+            <h4 style="color:#1a237e;margin-bottom:10px">SCAN TO PAY</h4>
+            <div id="invQrPreview" style="min-height:120px;display:flex;align-items:center;justify-content:center;border:1px dashed #bbb;border-radius:10px;padding:12px;background:#fafafa">
+              <span style="color:#999;font-size:13px">No QR code uploaded</span>
+            </div>
+            <div style="margin-top:10px;display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
+              <input type="file" id="invQrFile" accept="image/*" onchange="uploadInvoiceQr(event)"/>
+              <button class="btn btn-danger btn-sm" type="button" onclick="removeInvoiceQr()">🗑️ Remove QR</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+
+    <!-- INVOICE TRACKER -->
+    <section class="page-section" id="sec-invoiceTracker">
+      <div class="page-header" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+        <div>
+          <h2>📋 Invoice Tracker</h2>
+          <p>All generated invoices</p>
+        </div>
+        <button class="btn btn-secondary" type="button" onclick="showSection('invoice')">← Back to Invoice</button>
+      </div>
+      <div class="card">
+        <div style="display:flex;justify-content:flex-end;gap:10px;margin-bottom:12px">
+          <button class="btn btn-success" type="button" onclick="exportInvoiceTracker()">⬇️ Extract Tracker</button>
+          <button class="btn btn-secondary" type="button" onclick="loadInvoiceTracker()">🔄 Refresh</button>
+        </div>
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Invoice No</th>
+                <th>Bill To (Client Name)</th>
+                <th>Amount</th>
+                <th>Department</th>
+                <th>Date Generated</th>
+                <th>Status</th>
+                <th>Reference/Receipt #</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="invoiceTrackerTbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+</main>
 </div>
 
 <script>
@@ -1042,6 +2232,7 @@ function buildSidebar(role) {
       <div class="nav-item" data-section="schedule" onclick="showSection('schedule')">📅 Work Schedule</div>
       <div class="nav-item" data-section="reports" onclick="showSection('reports')">📈 Reports</div>
       <div class="nav-item" data-section="payroll" onclick="showSection('payroll')">💰 Payroll</div>
+      <div class="nav-item" data-section="invoice" onclick="showSection('invoice')">🧾 Invoice</div>
       <div class="nav-item" data-section="history" onclick="showSection('history')">📜 History</div>
       <div class="nav-item" data-section="users" onclick="showSection('users')">🔐 Users</div>
       <div class="nav-item" data-section="changepass" onclick="showChangePassword()">🔑 Change Password</div>
@@ -1073,6 +2264,8 @@ function showSection(id) {
   if (id === 'schedule') loadSchedules();
   if (id === 'reports') loadReports();
   if (id === 'history') loadHistory();
+  if (id === 'invoice') { loadDepartmentsIntoInvoice().then(function(){ refreshInvoiceAgents(); }); }
+  if (id === 'invoiceTracker') loadInvoiceTracker();
   if (id === 'payroll') loadPayroll();
   if (id === 'users') loadUsers();
 }
@@ -1491,6 +2684,7 @@ async function loadEmployees() {
       <td>${e.firstName||''}</td>
       <td>${e.middleName||''}</td>
       <td>${e.position||''}</td>
+      <td>${e.department||''}</td>
       <td>${e.hourlyRate ? '$'+parseFloat(e.hourlyRate).toFixed(2) : '—'}</td>
       <td>${e.birthday||''}</td>
       <td>${e.address||''}</td>
@@ -1630,11 +2824,24 @@ async function loadReports() {
       if (CU.role !== 'manager' && s.yvpId !== CU.yvpId) return;
       const toISO = (d) => {
         if (!d) return null;
-        d = String(d);
-        if (d.includes('-') && d.length >= 10) return d.slice(0, 10);
+        d = String(d).trim();
+        if (d.includes('T')) d = d.slice(0, 10);
+        if (/^\d{4}-\d{2}-\d{2}$/.test(d)) return d;
         if (d.includes('/')) {
           const p = d.split('/');
-          if (p.length === 3) return p[2] + '-' + p[0].padStart(2,'0') + '-' + p[1].padStart(2,'0');
+          if (p.length === 3) {
+            // MM/DD/YYYY or M/D/YYYY
+            const mm = p[0].padStart(2,'0');
+            const dd = p[1].padStart(2,'0');
+            let yy = p[2];
+            if (yy.length === 2) yy = '20' + yy;
+            return yy + '-' + mm + '-' + dd;
+          }
+        }
+        const t = Date.parse(d);
+        if (!isNaN(t)) {
+          const x = new Date(t);
+          return x.getFullYear() + '-' + String(x.getMonth()+1).padStart(2,'0') + '-' + String(x.getDate()).padStart(2,'0');
         }
         return d;
       };
@@ -1684,9 +2891,15 @@ async function loadReports() {
     const status = isAbsent ? 'ABSENT' : (l.timeOut ? (late > 0 ? 'TARDINESS' : 'PRESENT') : 'ACTIVE');
     const lunchMin = (l.lunchMinutes != null) ? l.lunchMinutes : '—';
     const breakMin = (l.breakMinutes != null) ? l.breakMinutes : '—';
-    const actBtns = (CU.role === 'manager' && !l.isSyntheticAbsent)
-      ? `<button class="btn btn-primary btn-sm" onclick="editAttendanceFromReport('${l.id}','${l.yvpId}','${(name||'').replace(/'/g,"\'")}','${l.date||''}','${l.timeIn||''}','${l.timeOut||''}')">Edit</button> <button class="btn btn-danger btn-sm" onclick="deleteLog('${l.id}')">Delete</button>`
-      : (CU.role === 'manager' && l.isSyntheticAbsent ? '<span style="color:#999;font-size:11px">No record</span>' : '');
+    let actBtns = '';
+    if (CU.role === 'manager') {
+      const safeName = (name||'').replace(/'/g, "\'");
+      const editId = l.isSyntheticAbsent ? ((l.yvpId||'') + '_' + (l.date||'')) : l.id;
+      actBtns = `<button class="btn btn-primary btn-sm" onclick="editAttendanceFromReport('${editId}','${l.yvpId}','${safeName}','${l.date||''}','${l.timeIn||''}','${l.timeOut||''}')">Edit</button>`;
+      if (!l.isSyntheticAbsent && l.id) {
+        actBtns += ` <button class="btn btn-danger btn-sm" onclick="deleteLog('${l.id}')">Delete</button>`;
+      }
+    }
     return `<tr>
       <td>${l.yvpId}</td>
       <td>${name}</td>
@@ -1718,25 +2931,26 @@ async function loadPayroll() {
   const fromDate = (document.getElementById('payFromDate') || {}).value || '';
   const toDate = (document.getElementById('payToDate') || {}).value || '';
 
-  const eSnap = await db.collection('employees').get();
+  const eSnap = await getDb().collection('employees').get();
   const rates = {};
+  const depts = {};
   eSnap.docs.forEach(d => {
     const e = d.data();
     rates[e.yvpId] = parseFloat(e.hourlyRate) || 0;
+    depts[e.yvpId] = e.department || '';
   });
 
-  const aSnap = await db.collection('attendance').get();
+  const aSnap = await getDb().collection('attendance').get();
   const summary = {};
 
   aSnap.docs.forEach(d => {
     const l = d.data();
     if (fromDate && l.date < fromDate) return;
     if (toDate && l.date > toDate) return;
-    if (!l.timeIn || !l.timeOut) return; // only completed shifts count
-
+    if (!l.timeIn || !l.timeOut) return;
     const yvpId = l.yvpId;
     if (!summary[yvpId]) {
-      summary[yvpId] = { name: getEmployeeFullName(yvpId) || l.name, hours: 0 };
+      summary[yvpId] = { name: (typeof getEmployeeFullName === 'function' ? getEmployeeFullName(yvpId) : null) || l.name, hours: 0 };
     }
     let hrs = parseFloat(l.totalHours) || 0;
     if (hrs > 6) hrs = 6;
@@ -1746,7 +2960,7 @@ async function loadPayroll() {
   const tbody = document.getElementById('payrollTbody');
   const ids = Object.keys(summary).sort();
   if (!ids.length) {
-    tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:#999">No data in selected period</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:#999">No data in selected period</td></tr>`;
     return;
   }
 
@@ -1757,8 +2971,9 @@ async function loadPayroll() {
     return `<tr>
       <td>${id}</td>
       <td>${s.name}</td>
-      <td>${s.hours.toFixed(2)}</td>
-      <td>$${rate.toFixed(2)}</td>
+      <td>${depts[id] || '—'}</td>
+      <td>${(Math.round(s.hours * 100) / 100)}</td>
+      <td>$${Math.round(rate)}</td>
       <td><b>$${billing.toFixed(2)}</b></td>
     </tr>`;
   }).join('');
@@ -1768,7 +2983,7 @@ async function loadPayroll() {
 
 // ── BULK EMPLOYEE UPLOAD / TEMPLATE ───────────────────
 function downloadEmpTemplate() {
-  const headers = ["YVP ID","Last Name","First Name","Middle Name","Position","Hourly Rate","Birthday","Address","Email Address","Contact Number"];
+  const headers = ["YVP ID","Last Name","First Name","Middle Name","Position","Department","Hourly Rate","Birthday","Address","Email Address","Contact Number"];
   const sample = ["YVP-0001","Dela Cruz","Juan","Santos","Staff","15.00","1995-06-15","123 Main St","juan@email.com","09171234567"];
   const ws = XLSX.utils.aoa_to_sheet([headers, sample]);
   const wb = XLSX.utils.book_new();
@@ -1799,6 +3014,7 @@ async function handleEmpUpload(event) {
           yvpId, lastName, firstName,
           middleName: get("Middle Name","Middlename"),
           position: get("Position","Job Title"),
+          department: get("Department","Dept"),
           hourlyRate: parseFloat(get("Hourly Rate","Rate")) || 0,
           birthday: get("Birthday","Birthdate"),
           address: get("Address"),
@@ -1953,12 +3169,11 @@ async function exportAttendanceReport() {
 async function exportPayrollReport() {
   const fromDate = (document.getElementById('payFromDate') || {}).value || '';
   const toDate = (document.getElementById('payToDate') || {}).value || '';
-
-  const eSnap = await db.collection("employees").get();
+  const eSnap = await getDb().collection("employees").get();
   const rates = {};
-  eSnap.docs.forEach(d => { rates[d.data().yvpId] = parseFloat(d.data().hourlyRate) || 0; });
-
-  const aSnap = await db.collection("attendance").get();
+  const depts = {};
+  eSnap.docs.forEach(d => { rates[d.data().yvpId] = parseFloat(d.data().hourlyRate) || 0; depts[d.data().yvpId] = d.data().department || ''; });
+  const aSnap = await getDb().collection("attendance").get();
   const summary = {};
   aSnap.docs.forEach(d => {
     const l = d.data();
@@ -1966,31 +3181,28 @@ async function exportPayrollReport() {
     if (toDate && l.date > toDate) return;
     if (!l.timeIn || !l.timeOut) return;
     const yvpId = l.yvpId;
-    if (!summary[yvpId]) summary[yvpId] = { name: getEmployeeFullName(yvpId) || l.name, hours: 0 };
+    if (!summary[yvpId]) summary[yvpId] = { name: (typeof getEmployeeFullName === 'function' ? getEmployeeFullName(yvpId) : null) || l.name, hours: 0 };
     let hrs = parseFloat(l.totalHours) || 0;
     if (hrs > 6) hrs = 6;
     summary[yvpId].hours += hrs;
   });
-
   const ids = Object.keys(summary).sort();
   if (!ids.length) { showToast("No data in selected period", "error"); return; }
-
-  const headers = ["YVP ID","Name","Total Hours","Hourly Rate (USD)","Total Billing (USD)"];
+  const headers = ["YVP ID","Name","Department","Total Hours","Hourly Rate","Total Billing"];
   const rows = ids.map(id => {
     const s = summary[id];
     const rate = rates[id] || 0;
     const billing = s.hours * rate;
-    return [id, s.name, s.hours.toFixed(2), rate.toFixed(2), billing.toFixed(2)];
+    return [id, s.name, depts[id]||'', Math.round(s.hours*100)/100, '$'+Math.round(rate), '$'+billing.toFixed(2)];
   });
-  const totalB = rows.reduce((s,r) => s + parseFloat(r[4]), 0);
-  const totalH = rows.reduce((s,r) => s + parseFloat(r[2]), 0);
-  rows.push(["","TOTAL", totalH.toFixed(2), "", totalB.toFixed(2)]);
-
-  const periodLabel = (fromDate || toDate) ? `Period: ${fromDate || '...'} to ${toDate || '...'}` : 'Period: All dates';
+  const totalH = rows.reduce((s,r)=>s+(parseFloat(r[3])||0),0);
+  const totalB = ids.reduce((s,id)=>s+(summary[id].hours*(rates[id]||0)),0);
+  rows.push(["","TOTAL","", Math.round(totalH*100)/100, "", '$'+totalB.toFixed(2)]);
+  const periodLabel = (fromDate||toDate) ? ('Period: '+(fromDate||'...')+' to '+(toDate||'...')) : 'Period: All dates';
   const ws = XLSX.utils.aoa_to_sheet([[periodLabel], [], headers, ...rows]);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Payroll");
-  XLSX.writeFile(wb, `YVP_Payroll_${fromDate || 'all'}_${toDate || 'all'}.xlsx`);
+  XLSX.writeFile(wb, 'YVP_Payroll_'+(fromDate||'all')+'_'+(toDate||'all')+'.xlsx');
   showToast("Payroll report downloaded");
 }
 
@@ -2178,6 +3390,7 @@ async function saveEmployee() {
     yvpId, lastName, firstName,
     middleName: (document.getElementById("fMid")||{}).value || "",
     position: (document.getElementById("fPosition")||{}).value || "",
+    department: (document.getElementById("fDepartment")||{}).value || "",
     hourlyRate: parseFloat((document.getElementById("fRate")||{}).value) || 0,
     birthday: (document.getElementById("fBday")||{}).value || "",
     email: (document.getElementById("fEmail")||{}).value || "",
@@ -2203,6 +3416,7 @@ async function editEmp(yvpId) {
   document.getElementById("fFirst").value = e.firstName || "";
   if (document.getElementById("fMid")) document.getElementById("fMid").value = e.middleName || "";
   if (document.getElementById("fPosition")) document.getElementById("fPosition").value = e.position || "";
+  if (document.getElementById("fDepartment")) document.getElementById("fDepartment").value = e.department || "";
   document.getElementById("fRate").value = e.hourlyRate || "";
   if (document.getElementById("fBday")) document.getElementById("fBday").value = e.birthday || "";
   if (document.getElementById("fEmail")) document.getElementById("fEmail").value = e.email || "";
@@ -2214,7 +3428,7 @@ async function editEmp(yvpId) {
 function showEmpForm() {
   document.getElementById("empForm").style.display = "block";
   document.getElementById("empFormTitle").textContent = "➕ Add Employee";
-  ["fId","fLast","fFirst","fMid","fPosition","fRate","fBday","fEmail","fContact","fAddr","fEditId"].forEach(id => {
+  ["fId","fLast","fFirst","fMid","fPosition","fDepartment","fRate","fBday","fEmail","fContact","fAddr","fEditId"].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.value = "";
   });
@@ -3121,6 +4335,558 @@ function editAttendanceFromReport(logId, yvpId, name, date, timeIn, timeOut) {
   document.getElementById('editAttTimeIn').value = (timeIn && timeIn !== '—') ? timeIn : '';
   document.getElementById('editAttTimeOut').value = (timeOut && timeOut !== '—') ? timeOut : '';
   document.getElementById('editAttModal').classList.add('active');
+}
+
+
+// ── DEPARTMENTS & INVOICE ─────────────────────────────
+const DEFAULT_DEPARTMENTS = ['Twinacre Ventures LLC', 'Vandelay Real Estate'];
+
+async function loadDepartmentList() {
+  let depts = DEFAULT_DEPARTMENTS.slice();
+  try {
+    const snap = await getDb().collection('departments').get();
+    snap.docs.forEach(d => {
+      const n = d.data().name;
+      if (n && depts.indexOf(n) === -1) depts.push(n);
+    });
+  } catch (e) {}
+  // also from employees
+  (cachedEmployees || []).forEach(e => {
+    if (e.department && depts.indexOf(e.department) === -1) depts.push(e.department);
+  });
+  return depts;
+}
+
+async function loadDepartmentsIntoInvoice() {
+  const depts = await loadDepartmentList();
+  const sel = document.getElementById('invDepartment');
+  const fDept = document.getElementById('fDepartment');
+  if (sel) {
+    const cur = sel.value;
+    sel.innerHTML = depts.map(d => `<option value="${d}">${d}</option>`).join('');
+    if (cur && depts.indexOf(cur) >= 0) sel.value = cur;
+  }
+  if (fDept) {
+    const cur = fDept.value;
+    fDept.innerHTML = '<option value="">— Select —</option>' + depts.map(d => `<option value="${d}">${d}</option>`).join('');
+    if (cur) fDept.value = cur;
+  }
+}
+
+function showAddDepartment() {
+  document.getElementById('newDeptName').value = '';
+  document.getElementById('addDeptModal').classList.add('active');
+}
+
+async function saveNewDepartment() {
+  const name = (document.getElementById('newDeptName').value || '').trim();
+  if (!name) { showToast('Enter department name', 'error'); return; }
+  try {
+    await getDb().collection('departments').doc(name.replace(/\//g,'_')).set({
+      name,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    closeModal('addDeptModal');
+    await loadDepartmentsIntoInvoice();
+    const sel = document.getElementById('invDepartment');
+    if (sel) sel.value = name;
+    showToast('Department added');
+    refreshInvoiceAgents();
+  } catch (e) {
+    showToast('Failed to add department: ' + e.message, 'error');
+  }
+}
+
+async function generateInvoiceNumber() {
+  try {
+    const ref = getDb().collection('meta').doc('invoiceCounter');
+    const num = await getDb().runTransaction(async (tx) => {
+      const doc = await tx.get(ref);
+      let next = 1;
+      if (doc.exists && doc.data().last) next = (parseInt(doc.data().last, 10) || 0) + 1;
+      tx.set(ref, { last: next }, { merge: true });
+      return next;
+    });
+    const invNo = 'YVP-INV' + String(num).padStart(4, '0');
+    document.getElementById('invNumber').value = invNo;
+    if (typeof saveInvoiceToTracker === 'function') { saveInvoiceToTracker(); }
+    showToast('Invoice number: ' + invNo);
+  } catch (e) {
+    console.error(e);
+    // fallback local sequential in localStorage
+    let n = parseInt(localStorage.getItem('yvp_inv_counter') || '0', 10) + 1;
+    localStorage.setItem('yvp_inv_counter', String(n));
+    const invNo = 'YVP-INV' + String(n).padStart(4, '0');
+    document.getElementById('invNumber').value = invNo;
+    if (typeof saveInvoiceToTracker === 'function') { saveInvoiceToTracker(); }
+    showToast('Invoice number: ' + invNo + ' (local)');
+  }
+}
+
+async function refreshInvoiceAgents() {
+  const dept = (document.getElementById('invDepartment') || {}).value || '';
+  const fromDate = (document.getElementById('invFrom') || {}).value || '';
+  const toDate = (document.getElementById('invTo') || {}).value || '';
+  const label = document.getElementById('invDeptLabel');
+  if (label) label.textContent = dept;
+  const tbody = document.getElementById('invAgentsTbody');
+  if (!tbody) return;
+
+  const emps = (cachedEmployees || []).filter(e => (e.department || '') === dept);
+  // hours from attendance
+  const aSnap = await getDb().collection('attendance').get();
+  const hoursMap = {};
+  aSnap.docs.forEach(d => {
+    const l = d.data();
+    if (!l.timeIn || !l.timeOut) return;
+    if (fromDate && l.date < fromDate) return;
+    if (toDate && l.date > toDate) return;
+    let hrs = parseFloat(l.totalHours) || 0;
+    if (hrs > 6) hrs = 6;
+    hoursMap[l.yvpId] = (hoursMap[l.yvpId] || 0) + hrs;
+  });
+
+  let totalDue = 0;
+  if (!emps.length) {
+    tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;color:#999">No employees in this department</td></tr>`;
+  } else {
+    tbody.innerHTML = emps.map(e => {
+      const name = [e.firstName, e.middleName, e.lastName].filter(Boolean).join(' ') || e.yvpId;
+      const hrs = Math.round((hoursMap[e.yvpId] || 0) * 100) / 100;
+      const rate = parseFloat(e.hourlyRate) || 0;
+      const total = hrs * rate;
+      totalDue += total;
+      return `<tr>
+        <td><input type="text" class="inv-edit-name" value="${name.replace(/"/g,'&quot;')}" style="width:100%;border:1px dashed #ccc;padding:4px 6px"/></td>
+        <td><input type="number" class="inv-edit-hrs" value="${hrs}" step="0.01" style="width:90px;border:1px dashed #ccc;padding:4px 6px" oninput="recalcInvoiceRow(this)"/></td>
+        <td><input type="number" class="inv-edit-rate" value="${Math.round(rate)}" step="1" style="width:90px;border:1px dashed #ccc;padding:4px 6px" oninput="recalcInvoiceRow(this)"/></td>
+        <td><input type="text" class="inv-edit-total" value="$${total.toFixed(2)}" style="width:100px;border:1px dashed #ccc;padding:4px 6px"/></td>
+      </tr>`;
+    }).join('');
+  }
+  const dueEl = document.getElementById('invTotalDue');
+  if (dueEl) {
+    if (dueEl.tagName === 'INPUT') dueEl.value = '$' + totalDue.toFixed(2);
+    else dueEl.textContent = '$' + totalDue.toFixed(2);
+  }
+  window._invoiceTotalDue = totalDue;
+  window._invoiceRows = emps.map(e => {
+    const name = [e.firstName, e.middleName, e.lastName].filter(Boolean).join(' ') || e.yvpId;
+    const hrs = Math.round((hoursMap[e.yvpId] || 0) * 100) / 100;
+    const rate = parseFloat(e.hourlyRate) || 0;
+    return { name, hrs, rate, total: hrs * rate };
+  });
+}
+
+function uploadInvoiceQr(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    const prev = document.getElementById('invQrPreview');
+    prev.innerHTML = '<img src="' + e.target.result + '" alt="QR" style="width:120px;height:160px;object-fit:cover;border:1px solid #ccc;border-radius:4px"/>';
+    window._invoiceQrDataUrl = e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+async function exportInvoiceExcel() {
+  if (typeof saveInvoiceToTracker === 'function') { try { await saveInvoiceToTracker(); } catch(e){} }
+
+  const dept = (document.getElementById('invDepartment') || {}).value || '';
+  const invNo = (document.getElementById('invNumber') || {}).value || '';
+  const client = (document.getElementById('invClientName') || {}).value || '';
+  const email = (document.getElementById('invClientEmail') || {}).value || '';
+  const fromDate = (document.getElementById('invFrom') || {}).value || '';
+  const toDate = (document.getElementById('invTo') || {}).value || '';
+  let rows = [];
+  document.querySelectorAll('#invAgentsTbody tr').forEach(tr => {
+    const name = tr.querySelector('.inv-edit-name')?.value || tr.cells[0]?.innerText || '';
+    const hrs = parseFloat(tr.querySelector('.inv-edit-hrs')?.value) || 0;
+    const rate = parseFloat(tr.querySelector('.inv-edit-rate')?.value) || 0;
+    const totalStr = (tr.querySelector('.inv-edit-total')?.value || '').replace(/[^0-9.\-]/g,'');
+    const total = parseFloat(totalStr) || (hrs * rate);
+    if (name) rows.push({ name, hrs, rate, total });
+  });
+  if (!rows.length) rows = window._invoiceRows || [];
+  const dueRaw = (document.getElementById('invTotalDue')?.value || document.getElementById('invTotalDue')?.textContent || '').replace(/[^0-9.\-]/g,'');
+  const totalDue = parseFloat(dueRaw) || window._invoiceTotalDue || 0;
+
+  const aoa = [
+    ['YVP Administrative Support Services'],
+    ['Phone: ' + ((document.getElementById('invPhone')||{}).value || ''), 'Email: ' + ((document.getElementById('invEmailFrom')||{}).value || '')],
+    [],
+    [(document.getElementById('invTitle')||{}).value || 'INVOICE'],
+    [],
+    ['NAME', client],
+    ['EMAIL', email],
+    ['Invoice No.', invNo],
+    ['Coverage From', fromDate, 'Coverage To', toDate],
+    ['Department', dept],
+    [],
+    ['Name', 'Hours Worked', 'Hourly Rate', 'Total'],
+    ...rows.map(r => [r.name, r.hrs, '$' + Math.round(r.rate), '$' + r.total.toFixed(2)]),
+    [],
+    ['TOTAL DUE', '', '', '$' + totalDue.toFixed(2)],
+    [],
+    ['Payment Instructions', (document.getElementById('invPayInstr')||{}).value || ''],
+    ['Bank Details', (document.getElementById('invBank')||{}).value || '']
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Invoice');
+  XLSX.writeFile(wb, (invNo || 'YVP_Invoice') + '.xlsx');
+  showToast('Invoice Excel downloaded');
+}
+
+
+
+
+function removeInvoiceQr() {
+  const prev = document.getElementById('invQrPreview');
+  if (prev) prev.innerHTML = '<span style="color:#999;font-size:13px">No QR code uploaded</span>';
+  window._invoiceQrDataUrl = null;
+  const f = document.getElementById('invQrFile');
+  if (f) f.value = '';
+  showToast('QR code removed');
+}
+
+function recalcInvoiceRow(el) {
+  try {
+    const tr = el.closest('tr');
+    if (!tr) return;
+    const hrs = parseFloat(tr.querySelector('.inv-edit-hrs')?.value) || 0;
+    const rate = parseFloat(tr.querySelector('.inv-edit-rate')?.value) || 0;
+    const total = hrs * rate;
+    const totEl = tr.querySelector('.inv-edit-total');
+    if (totEl) totEl.value = '$' + total.toFixed(2);
+    // sum all totals
+    let sum = 0;
+    document.querySelectorAll('#invAgentsTbody tr').forEach(row => {
+      const t = (row.querySelector('.inv-edit-total')?.value || '').replace(/[^0-9.\-]/g,'');
+      sum += parseFloat(t) || 0;
+    });
+    const dueEl = document.getElementById('invTotalDue');
+    if (dueEl) {
+      if (dueEl.tagName === 'INPUT') dueEl.value = '$' + sum.toFixed(2);
+      else dueEl.textContent = '$' + sum.toFixed(2);
+    }
+    window._invoiceTotalDue = sum;
+  } catch (e) { console.error(e); }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+function applyInvoiceDefaultsByDepartment(dept) {
+  const d = String(dept || '').trim().toLowerCase();
+  const nameEl = document.getElementById('invClientName');
+  const emailEl = document.getElementById('invClientEmail');
+  if (!nameEl || !emailEl) return;
+  if (d.indexOf('vandelay') >= 0) {
+    nameEl.value = 'ROY GOTTESDIENER';
+    emailEl.value = 'roygo88@gmail.com';
+  } else if (d.indexOf('twinacre') >= 0) {
+    nameEl.value = 'HILARIO CRUZ';
+    emailEl.value = 'twinacreventuresllc@gmail.com';
+  }
+  const pay = document.getElementById('invPayInstr');
+  const bank = document.getElementById('invBank');
+  if (pay && !String(pay.value || '').trim()) {
+    pay.value = 'Please send payment via my WISE Account\nWise: https://wise.com/pay/r/i3fIn-TuX7dU9io';
+  }
+  if (bank && !String(bank.value || '').trim()) {
+    bank.value = 'Account Name: JAN ADRIAN ALOBA BAUTISTA\nAccount Number: 2003095900\nBank Code: 01828-001-6\nBank Name: Wise Pilipinas Inc.';
+  }
+}
+
+async function exportInvoicePdf() {
+  try {
+    if (typeof saveInvoiceToTracker === 'function') await saveInvoiceToTracker();
+
+    if (typeof escapeHtml !== 'function') {
+      window.escapeHtml = function(s) {
+        return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+      };
+    }
+
+    const g = (id) => document.getElementById(id);
+    const phone = (g('invPhone') || {}).value || '';
+    const emailFrom = (g('invEmailFrom') || {}).value || '';
+    const title = (g('invTitle') || {}).value || 'INVOICE';
+    const clientName = (g('invClientName') || {}).value || '';
+    const clientEmail = (g('invClientEmail') || {}).value || '';
+    const invNo = (g('invNumber') || {}).value || '';
+    const fromDate = (g('invFrom') || {}).value || '';
+    const toDate = (g('invTo') || {}).value || '';
+    const dept = (g('invDepartment') || {}).value || '';
+    const payInstr = (g('invPayInstr') || {}).value || '';
+    const bank = (g('invBank') || {}).value || '';
+    const totalDueEl = g('invTotalDue');
+    const totalDue = totalDueEl ? (totalDueEl.value || totalDueEl.textContent || '$0.00') : '$0.00';
+    let agentRows = '';
+    document.querySelectorAll('#invAgentsTbody tr').forEach(tr => {
+      if (!tr.querySelector('.inv-edit-name')) return;
+      const name = tr.querySelector('.inv-edit-name').value || '';
+      const hrs = (tr.querySelector('.inv-edit-hrs') || {}).value || '';
+      const rate = (tr.querySelector('.inv-edit-rate') || {}).value || '';
+      const total = (tr.querySelector('.inv-edit-total') || {}).value || '';
+      agentRows += '<tr><td>' + escapeHtml(name) + '</td><td>' + escapeHtml(hrs) + '</td><td>$' + escapeHtml(String(rate).replace(/^\$/,'')) + '</td><td>' + escapeHtml(total) + '</td></tr>';
+    });
+    if (!agentRows) agentRows = '<tr><td colspan="4" style="text-align:center;color:#999">No agents</td></tr>';
+    const qr = window._invoiceQrDataUrl
+      ? '<img src="' + window._invoiceQrDataUrl + '" style="width:120px;height:160px;object-fit:cover;border:1px solid #ccc"/>'
+      : '<span style="color:#999">No QR uploaded</span>';
+    const htmlDoc = '<!DOCTYPE html><html><head><meta charset="UTF-8"/><title>' + escapeHtml(invNo || 'Invoice') + '</title><style>'
+      + 'body{font-family:Segoe UI,Arial,sans-serif;color:#222;padding:28px;max-width:800px;margin:0 auto}'
+      + 'h1{color:#1a237e;text-align:center;margin:0 0 6px;font-size:20px}'
+      + '.sub{text-align:center;color:#555;font-size:12px;margin-bottom:12px}'
+      + 'hr{border:none;border-top:2px solid #1a237e;margin:12px 0}'
+      + '.title{text-align:center;font-size:26px;font-weight:800;color:#1a237e;letter-spacing:2px;margin:10px 0 16px}'
+      + '.label{font-weight:700;color:#1a237e;margin-top:12px}'
+      + '.billto{font-weight:800;color:#1a237e;margin:10px 0 4px}'
+      + 'table{width:100%;border-collapse:collapse;margin-top:10px}'
+      + 'th,td{border:1px solid #ccc;padding:8px;text-align:left;font-size:13px}'
+      + 'th{background:#1a237e;color:#fff}'
+      + '.total{text-align:right;font-weight:800;color:#1a237e}'
+      + '.pre{white-space:pre-wrap;font-size:13px;margin-top:4px}'
+      + '.scan{text-align:center;margin-top:18px}'
+      + '</style></head><body>'
+      + '<h1>YVP Administrative Support Services</h1>'
+      + '<div class="sub">Phone: ' + escapeHtml(phone) + ' | Email: ' + escapeHtml(emailFrom) + '</div><hr/>'
+      + '<div class="title">' + escapeHtml(title) + '</div>'
+      + '<div class="billto">BILL TO:</div>'
+      + '<div><b>NAME:</b> ' + escapeHtml(clientName) + '</div>'
+      + '<div><b>EMAIL:</b> ' + escapeHtml(clientEmail) + '</div>'
+      + '<div class="label">INVOICE DETAILS</div>'
+      + '<div><b>Invoice No:</b> ' + escapeHtml(invNo) + '</div>'
+      + '<div><b>Coverage From:</b> ' + escapeHtml(fromDate) + ' &nbsp; <b>To:</b> ' + escapeHtml(toDate) + '</div>'
+      + '<div class="label">Real Estate VAs — ' + escapeHtml(dept) + '</div>'
+      + '<table><thead><tr><th>Name</th><th>Hours Worked</th><th>Hourly Rate</th><th>Total</th></tr></thead><tbody>' + agentRows
+      + '</tbody><tfoot><tr><td colspan="3" class="total">TOTAL DUE</td><td class="total">' + escapeHtml(totalDue) + '</td></tr></tfoot></table>'
+      + '<div class="label">Payment Instructions</div><div class="pre">' + escapeHtml(payInstr) + '</div>'
+      + '<div class="label">Bank Details</div><div class="pre">' + escapeHtml(bank) + '</div>'
+      + '<div class="scan"><div class="label">SCAN TO PAY</div>' + qr + '</div></body></html>';
+    const w = window.open('', '_blank');
+    if (!w) { showToast('Please allow pop-ups to export PDF', 'error'); return; }
+    w.document.open(); w.document.write(htmlDoc); w.document.close();
+    setTimeout(function(){ w.focus(); w.print(); }, 400);
+    showToast('Use Print dialog → Save as PDF');
+  } catch (e) {
+    console.error(e);
+    showToast('PDF export failed: ' + e.message, 'error');
+  }
+}
+
+
+function escapeHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+
+
+
+
+
+
+
+
+async function saveInvoiceToTracker() {
+  const invNo = (document.getElementById('invNumber') || {}).value || '';
+  if (!invNo) return null;
+  const billTo = (document.getElementById('invClientName') || {}).value || '';
+  const dept = (document.getElementById('invDepartment') || {}).value || '';
+  const totalDueEl = document.getElementById('invTotalDue');
+  const amount = totalDueEl ? (totalDueEl.value || totalDueEl.textContent || '$0.00') : '$0.00';
+  const now = new Date();
+  const dateGenerated = now.toLocaleString('en-US');
+  const payload = {
+    invoiceNo: invNo,
+    billTo: billTo,
+    amount: amount,
+    department: dept,
+    dateGenerated: dateGenerated,
+    status: 'Pending Payment',
+    referenceNo: '',
+    createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+    byUser: (CU && (CU.username || CU.name)) || 'system'
+  };
+  let isNew = true;
+  try {
+    const existing = await getDb().collection('invoices').doc(invNo).get();
+    isNew = !existing.exists;
+    await getDb().collection('invoices').doc(invNo).set(payload, { merge: true });
+  } catch (e) {
+    console.error('saveInvoiceToTracker', e);
+    try {
+      const list = JSON.parse(localStorage.getItem('yvp_invoices') || '[]');
+      const idx = list.findIndex(x => x.invoiceNo === invNo);
+      isNew = idx < 0;
+      if (idx >= 0) list[idx] = payload; else list.unshift(payload);
+      localStorage.setItem('yvp_invoices', JSON.stringify(list));
+    } catch (e2) {}
+  }
+
+  if (typeof logAttendanceHistory === 'function') {
+    const action = isNew
+      ? ('Invoice generated: ' + invNo + ' | Bill To: ' + (billTo || '—') + ' | Amount: ' + amount + ' | Department: ' + (dept || '—'))
+      : ('Invoice updated in Tracker: ' + invNo + ' | Bill To: ' + (billTo || '—') + ' | Amount: ' + amount + ' | Department: ' + (dept || '—'));
+    await logAttendanceHistory(invNo, billTo || invNo, action);
+  }
+  return payload;
+}
+
+
+
+
+async function deleteInvoiceTracker(invoiceNo, billTo) {
+  if (!invoiceNo) return;
+  if (!confirm('Delete invoice ' + invoiceNo + '?')) return;
+  try {
+    await getDb().collection('invoices').doc(invoiceNo).delete();
+  } catch (e) {
+    console.error(e);
+  }
+  // local fallback cleanup
+  try {
+    const list = JSON.parse(localStorage.getItem('yvp_invoices') || '[]');
+    localStorage.setItem('yvp_invoices', JSON.stringify(list.filter(x => x.invoiceNo !== invoiceNo)));
+  } catch (e2) {}
+
+  if (typeof logAttendanceHistory === 'function') {
+    await logAttendanceHistory(
+      invoiceNo,
+      billTo || invoiceNo,
+      'Invoice deleted from Tracker: ' + invoiceNo + (billTo ? ' (Bill To: ' + billTo + ')' : '')
+    );
+  }
+  showToast('Invoice deleted');
+  loadInvoiceTracker();
+}
+
+
+
+
+
+
+
+async function exportInvoiceTracker() {
+  let rows = [];
+  try {
+    const snap = await getDb().collection('invoices').limit(2000).get();
+    rows = snap.docs.map(d => d.data());
+  } catch (e) {
+    try { rows = JSON.parse(localStorage.getItem('yvp_invoices') || '[]'); } catch (e2) { rows = []; }
+  }
+  const headers = ['Invoice No', 'Bill To (Client Name)', 'Amount', 'Department', 'Date Generated', 'Status', 'Reference/Receipt #'];
+  const data = rows.map(r => [r.invoiceNo||'', r.billTo||'', r.amount||'', r.department||'', r.dateGenerated||'', r.status||'Pending Payment', r.referenceNo||'']);
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...data]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Invoice Tracker');
+  XLSX.writeFile(wb, 'YVP_Invoice_Tracker_' + new Date().toISOString().slice(0,10) + '.xlsx');
+  showToast('Invoice Tracker downloaded');
+}
+
+
+async function loadInvoiceTracker() {
+  const tbody = document.getElementById('invoiceTrackerTbody');
+  if (!tbody) return;
+  let rows = [];
+  try {
+    const snap = await getDb().collection('invoices').orderBy('createdAt', 'desc').limit(500).get();
+    rows = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  } catch (e) {
+    try {
+      const snap = await getDb().collection('invoices').limit(500).get();
+      rows = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      rows.sort((a,b) => String(b.dateGenerated||'').localeCompare(String(a.dateGenerated||'')));
+    } catch (e2) {
+      try {
+        rows = JSON.parse(localStorage.getItem('yvp_invoices') || '[]');
+        rows = rows.map(r => ({ id: r.invoiceNo, ...r }));
+      } catch (e3) { rows = []; }
+    }
+  }
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#999">No invoices generated yet. Click GENERATE INVOICE on the Invoice page.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map(r => {
+    const invNo = r.invoiceNo || r.id || '';
+    const safeInv = String(invNo).replace(/'/g, "\\'");
+    const safeBill = String(r.billTo || '').replace(/'/g, "\\'");
+    const status = r.status || 'Pending Payment';
+    const refNo = r.referenceNo || '';
+    const safeRef = String(refNo).replace(/"/g, '&quot;');
+    const optPending = status === 'Pending Payment' ? 'selected' : '';
+    const optReceived = status === 'Payment Received' ? 'selected' : '';
+    return '<tr data-invoice="' + safeInv + '">'
+      + '<td>' + (invNo || '—') + '</td>'
+      + '<td>' + (r.billTo || '—') + '</td>'
+      + '<td>' + (r.amount || '—') + '</td>'
+      + '<td>' + (r.department || '—') + '</td>'
+      + '<td>' + (r.dateGenerated || '—') + '</td>'
+      + '<td><select class="inv-track-status" style="padding:4px 6px;border-radius:6px;border:1px solid #ccc">'
+      + '<option value="Pending Payment" ' + optPending + '>Pending Payment</option>'
+      + '<option value="Payment Received" ' + optReceived + '>Payment Received</option>'
+      + '</select></td>'
+      + '<td><input type="text" class="inv-track-ref" value="' + safeRef + '" placeholder="Reference/Receipt #" style="width:140px;padding:4px 6px;border:1px solid #ccc;border-radius:6px"/></td>'
+      + '<td style="white-space:nowrap">'
+      + '<button class="btn btn-primary btn-sm" type="button" onclick="saveInvoiceTrackerRow(\'' + safeInv + '\', this)">Save</button> '
+      + '<button class="btn btn-danger btn-sm" type="button" onclick="deleteInvoiceTracker(\'' + safeInv + '\',\'' + safeBill + '\')">Delete</button>'
+      + '</td>'
+      + '</tr>';
+  }).join('');
+}
+
+async function saveInvoiceTrackerRow(invoiceNo, btn) {
+  if (!invoiceNo) return;
+  const tr = btn ? btn.closest('tr') : document.querySelector('tr[data-invoice="' + invoiceNo.replace(/'/g, "\\'") + '"]');
+  if (!tr) { showToast('Row not found', 'error'); return; }
+  const status = (tr.querySelector('.inv-track-status') || {}).value || 'Pending Payment';
+  const referenceNo = (tr.querySelector('.inv-track-ref') || {}).value || '';
+  try {
+    await getDb().collection('invoices').doc(invoiceNo).set({
+      status: status,
+      referenceNo: referenceNo,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+
+    try {
+      const list = JSON.parse(localStorage.getItem('yvp_invoices') || '[]');
+      const idx = list.findIndex(x => x.invoiceNo === invoiceNo);
+      if (idx >= 0) {
+        list[idx].status = status;
+        list[idx].referenceNo = referenceNo;
+        localStorage.setItem('yvp_invoices', JSON.stringify(list));
+      }
+    } catch (e2) {}
+
+    if (typeof logAttendanceHistory === 'function') {
+      await logAttendanceHistory(
+        invoiceNo,
+        invoiceNo,
+        'Invoice Tracker saved: Status="' + status + '", Reference/Receipt #="' + referenceNo + '" for ' + invoiceNo
+      );
+    }
+    showToast('Invoice ' + invoiceNo + ' saved');
+  } catch (e) {
+    console.error(e);
+    showToast('Failed to save: ' + e.message, 'error');
+  }
 }
 
 </script>
