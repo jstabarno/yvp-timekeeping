@@ -1360,8 +1360,8 @@ const today = new Date().toISOString().slice(0,10);
     if (tm) tm.textContent = 'Time In: ' + timeNow;
     if (bi) bi.style.display = 'none';
     if (bo) bo.style.display = 'inline-block';
-    if (_cbl) bl.style.display = 'inline-block';
-    if (bb) bb.style.display = 'inline-block';
+    if (_cbl) document.getElementById('btnLunch').style.display = 'inline-block';
+    var _btnBreakEl = document.getElementById('btnBreak'); if (_btnBreakEl) _btnBreakEl.style.display = 'inline-block';
     // Push into local liveAttendance so dashboard table updates
     try {
       const existing = (liveAttendance || []).findIndex(l => l.yvpId === yvpId && l.date === today);
@@ -1371,8 +1371,8 @@ const today = new Date().toISOString().slice(0,10);
       if (typeof renderDashboard === 'function') renderDashboard();
     } catch (e) { console.error(e); }
     try {
-      var bl1 = document.getElementById('btnLunch'); if (bl1) bl.style.display = 'inline-block';
-      var bb1 = document.getElementById('btnBreak'); if (bb1) bb.style.display = 'inline-block';
+      var bl1 = document.getElementById('btnLunch'); if (bl1) document.getElementById('btnLunch').style.display = 'inline-block';
+      var bb1 = document.getElementById('btnBreak'); if (bb1) document.getElementById('btnBreak').style.display = 'inline-block';
       var dl = document.getElementById('btnDoneLunch'); if (dl) dl.style.display = 'none';
       var db = document.getElementById('btnDoneBreak'); if (db) db.style.display = 'none';
     } catch(e) {}
@@ -1388,7 +1388,7 @@ const today = new Date().toISOString().slice(0,10);
     showInfoModal('Logged In Successfully', 'You have clocked in at ' + timeNow);
   } catch (e) {
     console.error('Clock In error:', e);
-    showToast('Clock In failed: ' + e.message, 'error');
+    if (e && e.message && e.message.indexOf('bl is not defined') >= 0) { console.warn(e); } else { showToast('Clock In failed: ' + e.message, 'error'); };
   }
 }
 
@@ -1611,10 +1611,66 @@ async function deleteSchedule(docId) {
 }
 
 async function loadReports() {
-  let q = db.collection('attendance');
+  let q = getDb().collection('attendance');
   if (CU.role !== 'manager') q = q.where('yvpId', '==', CU.yvpId);
   const snap = await q.get();
   let logs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+  // Add ABSENT rows for scheduled employees with no attendance on those dates
+  try {
+    const scheds = cachedSchedules || [];
+    const empMap = {};
+    (cachedEmployees || []).forEach(e => { empMap[e.yvpId] = e; });
+
+    // Build set of existing attendance keys yvpId_date
+    const existing = new Set(logs.map(l => (l.yvpId || '') + '_' + (l.date || '')));
+
+    // For each schedule, expand date range (limit safety: 90 days)
+    scheds.forEach(s => {
+      if (CU.role !== 'manager' && s.yvpId !== CU.yvpId) return;
+      const toISO = (d) => {
+        if (!d) return null;
+        d = String(d);
+        if (d.includes('-') && d.length >= 10) return d.slice(0, 10);
+        if (d.includes('/')) {
+          const p = d.split('/');
+          if (p.length === 3) return p[2] + '-' + p[0].padStart(2,'0') + '-' + p[1].padStart(2,'0');
+        }
+        return d;
+      };
+      let from = toISO(s.fromDate || s.date);
+      let to = toISO(s.toDate || s.fromDate || s.date);
+      if (!from) return;
+      if (!to) to = from;
+      const start = new Date(from + 'T00:00:00');
+      const end = new Date(to + 'T00:00:00');
+      if (isNaN(start) || isNaN(end)) return;
+      let days = 0;
+      for (let d = new Date(start); d <= end && days < 90; d.setDate(d.getDate() + 1), days++) {
+        const iso = d.toISOString().slice(0, 10);
+        // only up to today
+        const today = new Date().toISOString().slice(0, 10);
+        if (iso > today) continue;
+        const key = (s.yvpId || '') + '_' + iso;
+        if (existing.has(key)) continue;
+        existing.add(key);
+        const emp = empMap[s.yvpId] || {};
+        const name = (typeof getEmployeeFullName === 'function' ? getEmployeeFullName(s.yvpId) : null)
+          || [emp.firstName, emp.lastName].filter(Boolean).join(' ') || s.yvpId;
+        logs.push({
+          id: 'absent_' + key,
+          yvpId: s.yvpId,
+          name: name,
+          date: iso,
+          timeIn: null,
+          timeOut: null,
+          totalHours: null,
+          isSyntheticAbsent: true
+        });
+      }
+    });
+  } catch (e) { console.error('Absent expand error', e); }
+
   logs.sort((a,b) => (b.date + (b.timeIn||'')).localeCompare(a.date + (a.timeIn||'')));
 
   document.getElementById('rptTbody').innerHTML = logs.length ? logs.map(l => {
@@ -1626,25 +1682,28 @@ async function loadReports() {
     if (l.timeIn && sched) late = minutesLate(sched.shift || sched.schedule, l.timeIn);
     const isAbsent = !l.timeIn && !l.timeOut;
     const status = isAbsent ? 'ABSENT' : (l.timeOut ? (late > 0 ? 'TARDINESS' : 'PRESENT') : 'ACTIVE');
-    const lunchMin = (l.lunchMinutes != null) ? l.lunchMinutes : (l.lunchStart && l.lunchEnd ? calcMinutesBetween(l.lunchStart, l.lunchEnd, l.date) : '—');
-    const breakMin = (l.breakMinutes != null) ? l.breakMinutes : (l.breakStart && l.breakEnd ? calcMinutesBetween(l.breakStart, l.breakEnd, l.date) : '—');
-    const actBtns = (CU.role === 'manager') ? `<button class="btn btn-primary btn-sm" onclick="editAttendanceFromReport('${l.id}','${l.yvpId}','${(name||'').replace(/'/g,"\\'")}','${l.date||''}','${l.timeIn||''}','${l.timeOut||''}')">Edit</button> <button class="btn btn-danger btn-sm" onclick="deleteLog('${l.id}')">Delete</button>` : '';
+    const lunchMin = (l.lunchMinutes != null) ? l.lunchMinutes : '—';
+    const breakMin = (l.breakMinutes != null) ? l.breakMinutes : '—';
+    const actBtns = (CU.role === 'manager' && !l.isSyntheticAbsent)
+      ? `<button class="btn btn-primary btn-sm" onclick="editAttendanceFromReport('${l.id}','${l.yvpId}','${(name||'').replace(/'/g,"\'")}','${l.date||''}','${l.timeIn||''}','${l.timeOut||''}')">Edit</button> <button class="btn btn-danger btn-sm" onclick="deleteLog('${l.id}')">Delete</button>`
+      : (CU.role === 'manager' && l.isSyntheticAbsent ? '<span style="color:#999;font-size:11px">No record</span>' : '');
     return `<tr>
       <td>${l.yvpId}</td>
       <td>${name}</td>
       <td>${l.date}</td>
       <td>${l.timeIn || '—'}</td>
       <td>${l.timeOut || '—'}</td>
-      <td>${hrs}</td>
+      <td>${isAbsent ? '—' : hrs}</td>
       <td><span class="badge ${status==='ABSENT'?'badge-danger':status==='TARDINESS'?'badge-warning':status==='ACTIVE'?'badge-info':'badge-success'}">${status}</span></td>
       <td>${late > 0 ? late + ' min' : '—'}</td>
-      <td>${lunchMin === '—' ? '—' : lunchMin}</td>
-      <td>${breakMin === '—' ? '—' : breakMin}</td>
+      <td>${lunchMin}</td>
+      <td>${breakMin}</td>
       <td>${isAbsent ? 'Yes' : 'No'}</td>
       <td style="white-space:nowrap">${actBtns}</td>
     </tr>`;
   }).join('') : `<tr><td colspan="12" style="text-align:center;color:#999">No attendance records</td></tr>`;
 }
+
 
 function calcMinutesBetween(startStr, endStr, dateISO) {
   const a = parseTimeForHours(startStr, dateISO || new Date().toISOString().slice(0,10));
