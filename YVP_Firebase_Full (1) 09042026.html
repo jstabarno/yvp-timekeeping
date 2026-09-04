@@ -1,0 +1,3723 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>YVP Timekeeping System</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Segoe UI',sans-serif;background:linear-gradient(135deg,#1a237e,#1565c0);min-height:100vh;color:#333}
+#liveClock{position:fixed;top:14px;right:24px;color:#fff;font-size:13px;font-weight:600;background:rgba(255,255,255,0.15);padding:6px 14px;border-radius:20px;z-index:9999}
+#toast{position:fixed;bottom:32px;left:50%;transform:translateX(-50%);background:#1b5e20;color:#fff;padding:14px 32px;border-radius:30px;font-size:15px;font-weight:600;display:none;z-index:99999}
+#toast.error{background:#b71c1c}
+.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:10000;align-items:center;justify-content:center}
+.modal-overlay.active{display:flex}
+.modal-box{background:#fff;border-radius:16px;padding:36px 40px;max-width:480px;width:92%;box-shadow:0 20px 60px rgba(0,0,0,0.35);text-align:center;position:relative}
+.modal-box h3{font-size:20px;color:#1a237e;margin-bottom:10px}
+.modal-box p{color:#555;margin-bottom:22px;font-size:14px}
+.modal-close{position:absolute;top:14px;right:18px;background:none;border:none;font-size:22px;cursor:pointer;color:#999}
+.modal-btn{padding:11px 36px;border:none;border-radius:8px;font-size:15px;font-weight:700;cursor:pointer;background:#1a237e;color:#fff}
+.app-wrapper{display:flex;min-height:100vh}
+#sidebar{width:240px;background:rgba(255,255,255,0.07);display:flex;flex-direction:column;position:fixed;top:0;left:0;height:100%;z-index:100;padding-bottom:24px;border-right:1px solid rgba(255,255,255,0.12)}
+.sidebar-logo{padding:24px 20px 16px;border-bottom:1px solid rgba(255,255,255,0.12)}
+.sidebar-logo h1{color:#fff;font-size:15px;font-weight:800}
+.sidebar-logo span{display:block;color:rgba(255,255,255,0.5);font-size:10px;margin-top:3px;letter-spacing:1px}
+.sidebar-user{padding:14px 20px;border-bottom:1px solid rgba(255,255,255,0.1)}
+.user-avatar{width:72px;height:96px;border-radius:8px;background:linear-gradient(135deg,#42a5f5,#1565c0);display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;color:#fff;margin-bottom:6px;background-size:cover;background-position:center;overflow:hidden;border:2px solid rgba(255,255,255,0.3)}
+.user-name{color:#fff;font-size:13px;font-weight:600}
+.user-role{color:rgba(255,255,255,0.5);font-size:11px;text-transform:uppercase;letter-spacing:1px}
+.sidebar-nav{flex:1;padding:12px 0;overflow-y:auto}
+.nav-item{display:flex;align-items:center;gap:10px;padding:10px 20px;color:rgba(255,255,255,0.75);cursor:pointer;font-size:13px;border-left:3px solid transparent;transition:all 0.2s}
+.nav-item:hover{background:rgba(255,255,255,0.1);color:#fff}
+.nav-item.active{background:rgba(255,255,255,0.15);color:#fff;border-left-color:#64b5f6;font-weight:600}
+.sidebar-logout{padding:0 14px}
+.btn-logout{width:100%;padding:10px;background:rgba(244,67,54,0.2);border:1px solid rgba(244,67,54,0.4);color:#ef9a9a;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer}
+.btn-logout:hover{background:rgba(244,67,54,0.4);color:#fff}
+.main-content{margin-left:240px;flex:1;padding:30px}
+.page-section{display:none}
+.page-section.active{display:block}
+.page-header{margin-bottom:24px}
+.page-header h2{color:#fff;font-size:24px;font-weight:700}
+.page-header p{color:rgba(255,255,255,0.6);font-size:13px;margin-top:4px}
+.card{background:#fff;border-radius:14px;padding:24px;box-shadow:0 4px 20px rgba(0,0,0,0.12);margin-bottom:20px}
+.card h3{font-size:16px;color:#1a237e;font-weight:700;margin-bottom:16px;padding-bottom:10px;border-bottom:2px solid #e8eaf6}
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:16px;margin-bottom:20px}
+.stat-card{background:#fff;border-radius:12px;padding:20px;box-shadow:0 4px 16px rgba(0,0,0,0.1);border-left:5px solid #1a237e}
+.stat-card.green{border-left-color:#2e7d32}
+.stat-card.orange{border-left-color:#e65100}
+.stat-card.red{border-left-color:#c62828}
+.stat-label{color:#777;font-size:11px;text-transform:uppercase;letter-spacing:1px}
+.stat-value{font-size:30px;font-weight:800;margin-top:4px;color:#1a237e}
+.form-group{margin-bottom:16px}
+.form-group label{display:block;font-size:12px;font-weight:600;color:#444;margin-bottom:5px}
+.form-group input,.form-group select{width:100%;padding:9px 12px;border:1.5px solid #ddd;border-radius:8px;font-size:13px;background:#fafafa}
+.form-group input:focus,.form-group select:focus{outline:none;border-color:#1a237e;background:#fff}
+.form-row{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.btn{padding:9px 20px;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:6px;transition:all 0.2s}
+.btn-primary{background:#1a237e;color:#fff}
+.btn-success{background:#2e7d32;color:#fff}
+.btn-danger{background:#c62828;color:#fff}
+.btn-secondary{background:#546e7a;color:#fff}
+.btn-sm{padding:5px 12px;font-size:11px}
+.btn-warning{background:#f57f17;color:#fff}
+.btn-in{padding:12px 28px;background:#2e7d32;color:#fff;border:none;border-radius:8px;font-size:15px;font-weight:700;cursor:pointer}
+.btn-out{padding:12px 28px;background:#c62828;color:#fff;border:none;border-radius:8px;font-size:15px;font-weight:700;cursor:pointer}
+.modal-footer{display:flex;gap:10px;justify-content:flex-end;margin-top:14px}
+.table-wrapper{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:12px}
+thead th{background:#1a237e;color:#fff;padding:10px 12px;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:0.5px}
+tbody tr:nth-child(even){background:#f5f5f5}
+tbody tr:hover{background:#e8eaf6}
+tbody td{padding:10px 12px;border-bottom:1px solid #eee}
+.badge{display:inline-block;padding:3px 9px;border-radius:20px;font-size:10px;font-weight:700}
+.badge-success{background:#e8f5e9;color:#2e7d32}
+.badge-warning{background:#fff3e0;color:#e65100}
+.badge-danger{background:#ffebee;color:#c62828}
+.badge-info{background:#e3f2fd;color:#0d47a1}
+.badge-secondary{background:#eceff1;color:#546e7a}
+#loginScreen{position:fixed;inset:0;z-index:5000;background:linear-gradient(135deg,#1a237e,#1565c0);display:flex;align-items:center;justify-content:center}
+.login-card{background:#fff;border-radius:20px;padding:44px 40px;max-width:400px;width:92%;box-shadow:0 24px 64px rgba(0,0,0,0.4);text-align:center}
+.login-logo{font-size:48px;margin-bottom:8px}
+.login-card h1{font-size:22px;color:#1a237e;font-weight:800;margin-bottom:4px}
+.login-card .subtitle{color:#888;font-size:12px;margin-bottom:26px}
+.login-card .form-group{text-align:left}
+.login-btn{width:100%;padding:12px;background:#1a237e;color:#fff;border:none;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;margin-top:4px}
+.login-btn:hover{background:#283593}
+.login-error{color:#c62828;font-size:12px;margin-top:8px;display:none;font-weight:600;text-align:center}
+.upload-zone{border:2px dashed #9fa8da;border-radius:10px;padding:30px 20px;text-align:center;cursor:pointer;background:#f8f9ff;margin-bottom:14px}
+.filter-row{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-bottom:16px}
+.filter-row .form-group{margin-bottom:0;min-width:140px}
+
+/* Employee accordion */
+.emp-acc-row td{vertical-align:middle}
+.emp-acc-panel{display:none;background:#f7f9fc;border-top:1px solid #e0e6ef}
+.emp-acc-panel.open{display:table-row}
+.emp-acc-panel td{padding:16px 18px !important}
+.emp-acc-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px 20px;font-size:13px}
+.emp-acc-grid b{display:block;color:#1a237e;font-size:11px;text-transform:uppercase;letter-spacing:.4px;margin-bottom:2px}
+.emp-acc-actions{margin-top:14px;display:flex;gap:8px;flex-wrap:wrap}
+.emp-acc-toggle.active{background:#455a64 !important}
+@media (max-width:700px){
+  .emp-acc-grid{grid-template-columns:1fr !important}
+}
+
+</style>
+</head>
+<body>
+
+<div id="liveClock">⏰ --:--:--</div>
+<div id="toast"></div>
+
+<!-- INFO MODAL -->
+<div class="modal-overlay" id="infoModal">
+  <div class="modal-box">
+    <button class="modal-close" onclick="closeModal('infoModal')">✕</button>
+    <div style="font-size:48px;margin-bottom:10px" id="modalIcon">✅</div>
+    <h3 id="modalTitle">Success</h3>
+    <p id="modalMessage">Done.</p>
+    <button class="modal-btn" onclick="closeModal('infoModal')">OK</button>
+  </div>
+</div>
+
+
+
+
+<!-- CHANGE OWN PASSWORD MODAL -->
+<div class="modal-overlay" id="changePassModal">
+  <div class="modal-box" style="max-width:420px;text-align:left">
+    <button class="modal-close" onclick="closeModal('changePassModal')">✕</button>
+    <h3 style="color:#1a237e;margin-bottom:6px">🔑 Change Password</h3>
+    <p style="font-size:13px;color:#666;margin-bottom:16px">Set a new password for your account.</p>
+    <div class="form-group">
+      <label>Current Password *</label>
+      <input type="password" id="changeCurrentPass" placeholder="Enter current password"/>
+    </div>
+    <div class="form-group">
+      <label>New Password *</label>
+      <input type="password" id="changeNewPass" placeholder="Enter new password (min 6 chars)"/>
+    </div>
+    <div class="form-group">
+      <label>Confirm New Password *</label>
+      <input type="password" id="changeConfirmPass" placeholder="Re-enter new password"/>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('changePassModal')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveChangePassword()">💾 Update Password</button>
+    </div>
+  </div>
+</div>
+
+
+<!-- EDIT SCHEDULE MODAL -->
+<div class="modal-overlay" id="editSchedModal">
+  <div class="modal-box" style="max-width:440px;text-align:left">
+    <button class="modal-close" onclick="closeModal('editSchedModal')">✕</button>
+    <h3 style="color:#1a237e;margin-bottom:6px">✏️ Edit Work Schedule</h3>
+    <input type="hidden" id="editSchedDocId"/>
+    <div class="form-group">
+      <label>YVP ID</label>
+      <input type="text" id="editSchedYvpId" readonly style="background:#f0f0f0"/>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>From Date *</label>
+        <input type="text" id="editSchedFrom" placeholder="MM/DD/YYYY or YYYY-MM-DD"/>
+      </div>
+      <div class="form-group">
+        <label>To Date *</label>
+        <input type="text" id="editSchedTo" placeholder="MM/DD/YYYY or YYYY-MM-DD"/>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Schedule *</label>
+      <input type="text" id="editSchedShift" placeholder="e.g. 9PM - 6AM"/>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('editSchedModal')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveEditSchedule()">💾 Save Changes</button>
+    </div>
+  </div>
+</div>
+
+
+<!-- EDIT ATTENDANCE MODAL -->
+<div class="modal-overlay" id="editAttModal">
+  <div class="modal-box" style="max-width:440px;text-align:left">
+    <button class="modal-close" onclick="closeModal('editAttModal')">✕</button>
+    <h3 style="color:#1a237e;margin-bottom:6px">✏️ Edit Attendance</h3>
+    <p style="font-size:13px;color:#666;margin-bottom:16px">Manually update Time In / Time Out. Changes apply to Reports and Payroll.</p>
+    <input type="hidden" id="editAttDocId"/>
+    <input type="hidden" id="editAttYvpId"/>
+    <input type="hidden" id="editAttDate"/>
+    <div class="form-group">
+      <label>Employee</label>
+      <input type="text" id="editAttName" readonly style="background:#f0f0f0"/>
+    </div>
+    <div class="form-group">
+      <label>Date</label>
+      <input type="text" id="editAttDateDisplay" readonly style="background:#f0f0f0"/>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Time In *</label>
+        <input type="text" id="editAttTimeIn" placeholder="e.g. 09:00:00 PM"/>
+      </div>
+      <div class="form-group">
+        <label>Time Out</label>
+        <input type="text" id="editAttTimeOut" placeholder="e.g. 06:00:00 AM (optional)"/>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('editAttModal')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveEditAttendance()">💾 Save Changes</button>
+    </div>
+  </div>
+</div>
+
+
+<!-- EDIT USER ACCESS MODAL -->
+<div class="modal-overlay" id="editAccessModal">
+  <div class="modal-box" style="max-width:420px;text-align:left">
+    <button class="modal-close" onclick="closeModal('editAccessModal')">✕</button>
+    <h3 style="color:#1a237e;margin-bottom:6px">✏️ Edit User Access</h3>
+    <p style="font-size:13px;color:#666;margin-bottom:16px">Assign Rank &amp; File or Manager access.</p>
+    <input type="hidden" id="editAccessUid"/>
+    <div class="form-group">
+      <label>Username</label>
+      <input type="text" id="editAccessUsername" readonly style="background:#f0f0f0"/>
+    </div>
+    <div class="form-group">
+      <label>Role / Access Type *</label>
+      <select id="editAccessRole">
+        <option value="rank_file">Rank &amp; File</option>
+        <option value="manager">Manager</option>
+      </select>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('editAccessModal')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveUserAccess()">💾 Save Changes</button>
+    </div>
+  </div>
+</div>
+
+
+<div class="modal-overlay" id="addDeptModal">
+  <div class="modal-box" style="max-width:400px;text-align:left">
+    <button class="modal-close" onclick="closeModal('addDeptModal')">✕</button>
+    <h3 style="color:#1a237e;margin-bottom:12px">➕ Add Department</h3>
+    <div class="form-group">
+      <label>Department Name *</label>
+      <input type="text" id="newDeptName" placeholder="Department name"/>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('addDeptModal')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveNewDepartment()">💾 Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- LOGIN -->
+
+<div class="modal-overlay" id="empInfoModal">
+  <div class="modal-box" style="max-width:560px;text-align:left">
+    <button class="modal-close" onclick="closeEmpInfo()">✕</button>
+    <h3 style="color:#1a237e;margin-bottom:14px">👤 Employee Info</h3>
+    <input type="hidden" id="infoEmpYvpId"/>
+    <input type="hidden" id="infoEmpName"/>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px 16px;font-size:14px">
+      <div><b>YVP ID</b><div id="infoYvpId">—</div></div>
+      <div><b>Full Name</b><div id="infoFullName">—</div></div>
+      <div><b>Last Name</b><div id="infoLast">—</div></div>
+      <div><b>First Name</b><div id="infoFirst">—</div></div>
+      <div><b>Middle Name</b><div id="infoMid">—</div></div>
+      <div><b>Position</b><div id="infoPos">—</div></div>
+      <div><b>Department</b><div id="infoDept">—</div></div>
+      <div><b>Hourly Rate</b><div id="infoRate">—</div></div>
+      <div><b>Birthday</b><div id="infoBday">—</div></div>
+      <div><b>Email</b><div id="infoEmail">—</div></div>
+      <div style="grid-column:1/-1"><b>Address</b><div id="infoAddr">—</div></div>
+      <div><b>Contact</b><div id="infoContact">—</div></div>
+    </div>
+    <div style="margin-top:20px;display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end">
+      <button class="btn btn-warning" type="button" onclick="showResetPasswordForEmployee(document.getElementById('infoEmpYvpId').value, document.getElementById('infoEmpName').value)">Reset Password</button>
+      <button class="btn btn-danger" type="button" onclick="deleteEmployee(document.getElementById('infoEmpYvpId').value); closeEmpInfo();">Delete</button>
+      <button class="btn btn-secondary" type="button" onclick="closeEmpInfo()">Close</button>
+    </div>
+  </div>
+</div>
+
+<div id="loginScreen">
+  <div class="login-card">
+    <div class="login-logo">🏢</div>
+    <h1>YVP Timekeeping</h1>
+    <p class="subtitle">Employee Time Management System</p>
+    <div class="form-group">
+      <label>Username</label>
+      <input type="text" id="sysUsername" placeholder="Username" autocomplete="off"/>
+    </div>
+    <div class="form-group">
+      <label>Password</label>
+      <input type="password" id="sysPassword" placeholder="Password"
+        onkeydown="if(event.key==='Enter')doLogin()"/>
+    </div>
+    <div class="login-error" id="loginErr">❌ Invalid username or password.</div>
+    <button class="login-btn" onclick="doLogin()">🔐 Login</button>
+  </div>
+</div>
+
+<!-- MAIN APP -->
+<div class="app-wrapper" id="mainApp" style="display:none">
+  <nav id="sidebar">
+    <div class="sidebar-logo">
+      <h1>YVP Timekeeping</h1>
+      <span>TIME MANAGEMENT SYSTEM</span>
+    </div>
+    <div class="sidebar-user" style="text-align:center">
+      <div style="position:relative;display:inline-block;margin-bottom:8px">
+        <div class="user-avatar" id="sbAvatar" style="width:72px;height:96px;border-radius:8px;cursor:pointer;font-size:22px" title="Click to upload photo" onclick="document.getElementById('profilePicInput').click()">?</div>
+        <input type="file" id="profilePicInput" accept="image/*" style="display:none" onchange="handleProfilePicUpload(event)"/>
+      </div>
+      <div class="user-name" id="sbName" style="font-weight:700;font-size:13px;color:#fff">—</div>
+      <div class="user-role" id="sbPosition" style="font-size:11px;color:rgba(255,255,255,0.65);margin-top:2px">—</div>
+      <div id="sbRole" style="display:none">—</div>
+    </div>
+    <div class="sidebar-nav" id="sidebarNav"></div>
+    <div class="sidebar-logout">
+      <button class="btn-logout" onclick="doLogout()">🚪 Sign Out</button>
+    </div>
+  </nav>
+  <main class="main-content">
+    <!-- DASHBOARD -->
+    <section class="page-section" id="sec-dashboard">
+      <div class="page-header"><h2>📊 Dashboard</h2><p>Welcome to YVP Timekeeping</p></div>
+      <div class="card" id="clockCard" style="max-width:640px;margin:0 auto 24px;text-align:center">
+        <h3>⏱️ My Attendance Today</h3>
+        <div id="clockStatus" style="margin-bottom:16px;font-size:15px;color:#555">Checking status...</div>
+        <div id="clockTimes" style="margin-bottom:18px;font-size:14px;color:#333"></div>
+        <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap">
+          <button class="btn-in" id="btnClockIn" onclick="clockIn()" style="display:none;min-width:140px">✅ CLOCK IN</button>
+          <button class="btn-out" id="btnClockOut" onclick="clockOut()" style="display:none;min-width:140px">🚪 CLOCK OUT</button>
+          <button class="btn btn-warning" id="btnLunch" onclick="startLunch()" style="display:none;min-width:140px;background:#f57c00;color:#fff;border:none;padding:12px 18px;border-radius:10px;font-weight:700;cursor:pointer">🍽️ LUNCH</button>
+          <button class="btn btn-primary" id="btnDoneLunch" onclick="endLunch()" style="display:none;min-width:140px;background:#2e7d32;color:#fff;border:none;padding:12px 18px;border-radius:10px;font-weight:700;cursor:pointer">✅ DONE LUNCH</button>
+          <button class="btn btn-secondary" id="btnBreak" onclick="startBreak()" style="display:none;min-width:140px;background:#0277bd;color:#fff;border:none;padding:12px 18px;border-radius:10px;font-weight:700;cursor:pointer">☕ BREAK</button>
+          <button class="btn btn-primary" id="btnDoneBreak" onclick="endBreak()" style="display:none;min-width:140px;background:#2e7d32;color:#fff;border:none;padding:12px 18px;border-radius:10px;font-weight:700;cursor:pointer">✅ DONE BREAK</button>
+        </div>
+        <div id="lunchTimer" style="display:none;margin-top:14px;font-size:20px;font-weight:700;color:#e65100"></div>
+        <div id="breakTimer" style="display:none;margin-top:14px;font-size:20px;font-weight:700;color:#1565c0"></div>
+      </div>
+      <div class="card" id="myScheduleCard">
+        <h3>📅 My Work Schedule</h3>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th>From Date</th><th>To Date</th><th>Schedule</th></tr></thead>
+            <tbody id="myScheduleTbody"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="card" id="todayAttendanceCard" style="display:none">
+        <h3>📋 Today's Attendance (All Employees)</h3>
+        <div class="stats-grid" id="dashStats" style="margin-bottom:16px"></div>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th>YVP ID</th><th>Name</th><th>Time In</th><th>Time Out</th><th>Total Hours</th><th>Status</th><th>Tardiness</th><th>Actions</th></tr></thead>
+            <tbody id="todayTbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- EMPLOYEES -->
+    <section class="page-section" id="sec-employees">
+      <div class="page-header"><h2>👥 Employees</h2><p>Manage employee records</p></div>
+      <div class="card">
+        <h3>📤 Bulk Upload New Hires</h3>
+        <div class="upload-zone" onclick="document.getElementById('empFile').click()">
+          <div style="font-size:36px;margin-bottom:8px">📂</div>
+          <p><b>Click to upload Excel file</b></p>
+          <small style="color:#999">Columns: YVP ID | Last Name | First Name | Middle Name | Position | Department | Hourly Rate | Birthday | Address | Email | Contact</small>
+        </div>
+        <input type="file" id="empFile" accept=".xlsx,.xls" style="display:none" onchange="handleEmpUpload(event)"/>
+        <div style="display:flex;gap:10px;margin-top:8px;flex-wrap:wrap">
+          <button class="btn btn-secondary" onclick="downloadEmpTemplate()">⬇️ Download Template</button>
+          <span id="empUploadStatus" style="font-size:13px;color:#555;align-self:center"></span>
+        </div>
+      </div>
+      <div class="card">
+        <h3>👥 Employee List</h3>
+        <div class="filter-row">
+          <div class="form-group" style="flex:1">
+            <label>Search</label>
+            <input type="text" id="empSearch" placeholder="Name or YVP ID..." oninput="loadEmployees()"/>
+          </div>
+          <button class="btn btn-primary" onclick="showEmpForm()">➕ Add Employee</button>
+          <button class="btn btn-success" onclick="createAllRankFileLogins()">🔑 Create Logins for All</button>
+        </div>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr>
+              <th>YVP ID</th>
+              <th>Full Name</th>
+              <th>Position</th>
+              <th>Actions</th>
+            </tr></thead>
+            <tbody id="empTbody"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="card" id="empForm" style="display:none">
+        <h3 id="empFormTitle">➕ Add Employee</h3>
+        <div class="form-row">
+          <div class="form-group"><label>YVP ID *</label><input type="text" id="fId"/></div>
+          <div class="form-group"><label>Last Name *</label><input type="text" id="fLast"/></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label>First Name *</label><input type="text" id="fFirst"/></div>
+          <div class="form-group"><label>Middle Name</label><input type="text" id="fMid"/></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label>Position</label><input type="text" id="fPosition"/></div>
+          <div class="form-group"><label>Department</label>
+            <select id="fDepartment">
+              <option value="">— Select —</option>
+              <option value="Twinacre Ventures LLC">Twinacre Ventures LLC</option>
+              <option value="Vandelay Real Estate">Vandelay Real Estate</option>
+            </select>
+          </div>
+          <div class="form-group"><label>Hourly Rate ($)</label><input type="number" id="fRate" step="0.01"/></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label>Birthday</label><input type="date" id="fBday"/></div>
+          <div class="form-group"><label>Email</label><input type="email" id="fEmail"/></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label>Contact</label><input type="text" id="fContact"/></div>
+          <div class="form-group"><label>Address</label><input type="text" id="fAddr"/></div>
+        </div>
+        <input type="hidden" id="fEditId"/>
+        <div style="display:flex;gap:10px;margin-top:6px">
+          <button class="btn btn-success" onclick="saveEmployee()">💾 Save</button>
+          <button class="btn btn-secondary" onclick="document.getElementById('empForm').style.display='none'">Cancel</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- SCHEDULE -->
+    <section class="page-section" id="sec-schedule">
+      <div class="page-header"><h2>📅 Work Schedule</h2><p>Manage employee work schedules</p></div>
+
+      <div class="card" id="addScheduleCard">
+        <h3>➕ Add Schedule</h3>
+        <div class="form-row">
+          <div class="form-group"><label>YVP ID *</label><input type="text" id="addSchedYvpId" placeholder="YVP ID"/></div>
+          <div class="form-group"><label>From Date *</label><input type="date" id="addSchedFrom"/></div>
+          <div class="form-group"><label>To Date *</label><input type="date" id="addSchedTo"/></div>
+          <div class="form-group"><label>Schedule *</label><input type="text" id="addSchedShift" placeholder="e.g. 9PM - 6AM"/></div>
+        </div>
+        <button class="btn btn-primary" type="button" onclick="submitAddSchedule()">✅ Submit</button>
+      </div>
+
+      <div class="card">
+        <h3>📤 Bulk Upload Work Schedules</h3>
+        <div class="upload-zone" onclick="document.getElementById('schedFile').click()">
+          <div style="font-size:36px;margin-bottom:8px">📂</div>
+          <p><b>Click to upload Excel file</b></p>
+          <small style="color:#999">Columns: YVP ID | From Date (MM/DD/YYYY) | To Date (MM/DD/YYYY) | Schedule</small>
+        </div>
+        <input type="file" id="schedFile" accept=".xlsx,.xls" style="display:none" onchange="handleSchedUpload(event)"/>
+        <div style="display:flex;gap:10px;margin-top:8px;flex-wrap:wrap">
+          <button class="btn btn-secondary" onclick="downloadSchedTemplate()">⬇️ Download Template</button>
+          <button class="btn btn-success" onclick="exportWorkSchedules()">⬇️ Extract Schedules</button>
+          <span id="schedUploadStatus" style="font-size:13px;color:#555;align-self:center"></span>
+        </div>
+      </div>
+      <div class="card">
+        <h3>📋 All Work Schedules</h3>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th>YVP ID</th><th>From Date</th><th>To Date</th><th>Schedule</th><th>Actions</th></tr></thead>
+            <tbody id="schedTbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- REPORTS -->
+    <section class="page-section" id="sec-reports">
+      <div class="page-header"><h2>📈 Reports</h2><p>View and export attendance records</p></div>
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
+          <h3 style="margin:0;border:none;padding:0">📋 Attendance Report</h3>
+          <div style="display:flex;gap:10px">
+            <button class="btn btn-success" onclick="exportAttendanceReport()">⬇️ Download Excel</button>
+            <button class="btn btn-secondary" onclick="loadReports()">🔄 Refresh</button>
+          </div>
+        </div>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr>
+              <th>YVP ID</th><th>Name</th><th>Date</th><th>Time In</th><th>Time Out</th><th>Total Hours</th><th>Status</th><th>Tardiness</th><th>Lunch (min)</th><th>Break (min)</th><th>Absent</th><th>Actions</th>
+            </tr></thead>
+            <tbody id="rptTbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- PAYROLL -->
+    <section class="page-section" id="sec-payroll">
+      <div class="page-header"><h2>💰 Payroll Report</h2><p>Payroll billing summary based on attendance hours</p></div>
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
+          <h3 style="margin:0;border:none;padding:0">💰 Payroll Report</h3>
+          <div style="display:flex;gap:10px;flex-wrap:wrap">
+            <button class="btn btn-success" onclick="exportPayrollReport()">⬇️ Download Excel</button>
+            <button class="btn btn-secondary" onclick="loadPayroll()">🔄 Refresh</button>
+          </div>
+        </div>
+        <div class="filter-row" style="margin-bottom:16px;align-items:flex-end">
+          <div class="form-group">
+            <label>Coverage Period — From</label>
+            <input type="date" id="payFromDate"/>
+          </div>
+          <div class="form-group">
+            <label>Coverage Period — To</label>
+            <input type="date" id="payToDate"/>
+          </div>
+          <div class="form-group">
+            <label>&nbsp;</label>
+            <button class="btn btn-primary" type="button" onclick="loadPayroll()">✅ Submit</button>
+          </div>
+        </div>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr>
+              <th>YVP ID</th><th>Name</th><th>Department</th><th>Total Hours</th><th>Hourly Rate</th><th>Total Billing (USD)</th>
+            </tr></thead>
+            <tbody id="payrollTbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- HISTORY -->
+    <section class="page-section" id="sec-history">
+      <div class="page-header"><h2>📜 History</h2><p>Attendance transaction log</p></div>
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
+          <h3 style="margin:0;border:none;padding:0">📜 Attendance History</h3>
+          <div style="display:flex;gap:10px;flex-wrap:wrap">
+            <button class="btn btn-success" onclick="exportHistoryReport()">⬇️ Extract Report</button>
+            <button class="btn btn-secondary" onclick="loadHistory()">🔄 Refresh</button>
+          </div>
+        </div>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr>
+              <th>YVP ID</th><th>Name</th><th>Transaction</th><th>Date &amp; Time</th>
+            </tr></thead>
+            <tbody id="historyTbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+
+    <!-- USERS -->
+    <section class="page-section" id="sec-users">
+      <div class="page-header"><h2>🔐 User Management</h2><p>Manage system accounts</p></div>
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+          <h3 style="margin:0;border:none;padding:0">User Accounts</h3>
+          <button class="btn btn-primary" onclick="showAddUserForm()">➕ Add User</button>
+        </div>
+        <div id="addUserForm" style="display:none;background:#f8f9ff;padding:16px;border-radius:10px;margin-bottom:16px">
+          <h4 style="color:#1a237e;margin-bottom:12px">Create User Account</h4>
+          <div class="form-row">
+            <div class="form-group"><label>YVP ID *</label><input type="text" id="newUserYvpId" placeholder="Must exist in Employees"/></div>
+            <div class="form-group"><label>Role *</label>
+              <select id="newUserRole">
+                <option value="rank_file">Rank & File</option>
+                <option value="manager">Manager</option>
+              </select>
+            </div>
+          </div>
+          <div style="display:flex;gap:10px">
+            <button class="btn btn-success" onclick="createUserAccount()">💾 Create Account</button>
+            <button class="btn btn-secondary" onclick="document.getElementById('addUserForm').style.display='none'">Cancel</button>
+          </div>
+        </div>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th>Username</th><th>Name</th><th>Role</th><th>YVP ID</th><th>Actions</th></tr></thead>
+            <tbody id="usersTbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  
+    <!-- INVOICE -->
+    <section class="page-section" id="sec-invoice">
+      <div class="page-header"><h2>🧾 Invoice</h2><p>Generate department invoices</p></div>
+      <div class="card">
+        <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;margin-bottom:16px">
+          <div class="form-group" style="min-width:220px">
+            <label>Department</label>
+            <select id="invDepartment" onchange="applyInvoiceDefaultsByDepartment(this.value); refreshInvoiceAgents()">
+              <option value="Twinacre Ventures LLC">Twinacre Ventures LLC</option>
+              <option value="Vandelay Real Estate">Vandelay Real Estate</option>
+            </select>
+          </div>
+          <button class="btn btn-secondary" type="button" onclick="showAddDepartment()">➕ Add Department</button>
+          <button class="btn btn-success" type="button" onclick="exportInvoiceExcel()">⬇️ Extract Excel</button>
+          <button class="btn btn-primary" type="button" onclick="exportInvoicePdf()">⬇️ Extract PDF</button>
+          <button class="btn btn-warning" type="button" onclick="showSection('invoiceTracker')" style="margin-left:auto">📋 INVOICE Tracker</button>
+        </div>
+
+        <div id="invoicePreview" style="background:#fff;border:1px solid #ddd;border-radius:12px;padding:28px;max-width:900px;margin:0 auto;color:#222">
+          <div style="text-align:center;margin-bottom:8px">
+            <div style="font-size:18px;font-weight:800;color:#1a237e">YVP Administrative Support Services</div>
+            <div style="font-size:12px;color:#555;margin-top:6px">
+              Phone: <input id="invPhone" value="+19106726372" style="border:1px dashed #ccc;padding:2px 6px;width:140px;font-size:12px"/>
+              &nbsp;|&nbsp; Email:
+              <input id="invEmailFrom" value="yourvirtualjanny@gmail.com" style="border:1px dashed #ccc;padding:2px 6px;width:200px;font-size:12px"/>
+            </div>
+          </div>
+          <hr style="margin:14px 0;border:none;border-top:2px solid #1a237e"/>
+          <div style="text-align:center;margin-bottom:16px">
+            <input id="invTitle" value="INVOICE" style="border:none;text-align:center;font-size:28px;font-weight:800;color:#1a237e;width:100%;letter-spacing:2px"/>
+          </div>
+          <div style="font-weight:800;color:#1a237e;margin:8px 0 6px;font-size:14px;letter-spacing:0.5px">BILL TO:</div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>NAME</label>
+              <input type="text" id="invClientName" placeholder="Client / Company name"/>
+            </div>
+            <div class="form-group">
+              <label>EMAIL</label>
+              <input type="email" id="invClientEmail" placeholder="client@email.com"/>
+            </div>
+          </div>
+          <h4 style="margin:18px 0 10px;color:#1a237e">INVOICE DETAILS</h4>
+          <div class="form-row" style="align-items:flex-end">
+            <div class="form-group">
+              <label>Invoice No.</label>
+              <div style="display:flex;gap:8px">
+                <input type="text" id="invNumber" readonly style="background:#f5f5f5;font-weight:700" placeholder="Click Generate"/>
+                <button class="btn btn-warning" type="button" onclick="generateInvoiceNumber()">GENERATE INVOICE</button>
+              </div>
+            </div>
+            <div class="form-group">
+              <label>Coverage From</label>
+              <input type="date" id="invFrom" onchange="refreshInvoiceAgents()"/>
+            </div>
+            <div class="form-group">
+              <label>Coverage To</label>
+              <input type="date" id="invTo" onchange="refreshInvoiceAgents()"/>
+            </div>
+          </div>
+
+          <h4 style="margin:18px 0 10px;color:#1a237e">Real Estate VAs — <span id="invDeptLabel">Twinacre Ventures LLC</span></h4>
+          <div class="table-wrapper">
+            <table>
+              <thead><tr><th>Name</th><th>Hours Worked</th><th>Hourly Rate</th><th>Total</th></tr></thead>
+              <tbody id="invAgentsTbody"></tbody>
+              <tfoot>
+                <tr>
+                  <td colspan="3" style="text-align:right;font-weight:700;padding-right:24px">TOTAL DUE</td>
+                  <td style="font-weight:800;color:#1a237e">
+                    <input type="text" id="invTotalDue" value="$0.00" style="width:120px;font-weight:800;color:#1a237e;border:1px dashed #ccc;padding:6px 8px;text-align:right"/>
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+          <p style="font-size:12px;color:#777;margin-top:6px">Tip: Name, Hours, Rate, Total, and TOTAL DUE are editable.</p>
+
+          <div class="form-group" style="margin-top:16px">
+            <label>Payment Instructions</label>
+            <textarea id="invPayInstr" rows="3" style="width:100%;padding:10px;border-radius:8px;border:1px solid #ccc">Please send payment via my WISE Account
+Wise: https://wise.com/pay/r/i3fIn-TuX7dU9io</textarea>
+          </div>
+          <div class="form-group">
+            <label>Bank Details</label>
+            <textarea id="invBank" rows="4" style="width:100%;padding:10px;border-radius:8px;border:1px solid #ccc">Account Name: JAN ADRIAN ALOBA BAUTISTA
+Account Number: 2003095900
+Bank Code: 01828-001-6
+Bank Name: Wise Pilipinas Inc.</textarea>
+          </div>
+
+          <div style="margin-top:18px;text-align:center">
+            <h4 style="color:#1a237e;margin-bottom:10px">SCAN TO PAY</h4>
+            <div id="invQrPreview" style="min-height:120px;display:flex;align-items:center;justify-content:center;border:1px dashed #bbb;border-radius:10px;padding:12px;background:#fafafa">
+              <span style="color:#999;font-size:13px">No QR code uploaded</span>
+            </div>
+            <div style="margin-top:10px;display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
+              <input type="file" id="invQrFile" accept="image/*" onchange="uploadInvoiceQr(event)"/>
+              <button class="btn btn-danger btn-sm" type="button" onclick="removeInvoiceQr()">🗑️ Remove QR</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+
+    <!-- INVOICE TRACKER -->
+    <section class="page-section" id="sec-invoiceTracker">
+      <div class="page-header" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+        <div>
+          <h2>📋 Invoice Tracker</h2>
+          <p>All generated invoices</p>
+        </div>
+        <button class="btn btn-secondary" type="button" onclick="showSection('invoice')">← Back to Invoice</button>
+      </div>
+      <div class="card">
+        <div style="display:flex;justify-content:flex-end;gap:10px;margin-bottom:12px">
+          <button class="btn btn-success" type="button" onclick="exportInvoiceTracker()">⬇️ Extract Tracker</button>
+          <button class="btn btn-secondary" type="button" onclick="loadInvoiceTracker()">🔄 Refresh</button>
+        </div>
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Invoice No</th>
+                <th>Bill To (Client Name)</th>
+                <th>Amount</th>
+                <th>Department</th>
+                <th>Date Generated</th>
+                <th>Status</th>
+                <th>Reference/Receipt #</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="invoiceTrackerTbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+</main>
+</div>
+
+<script>
+
+// ── FIREBASE INIT ─────────────────────────────────────
+// For Firebase JS SDK v7.20.0 and later, measurementId is optional
+const firebaseConfig = {
+  apiKey: "AIzaSyAssgQDkZiH1GA23UKpHjnlkwuR1uSC7nw",
+  authDomain: "yvp-timekeeping.firebaseapp.com",
+  projectId: "yvp-timekeeping",
+  storageBucket: "yvp-timekeeping.firebasestorage.app",
+  messagingSenderId: "72884343070",
+  appId: "1:72884343070:web:6989418a81e18b2375f90f",
+  measurementId: "G-4KES6C1VJB"
+};
+if (!firebase.apps.length) {
+  firebase.initializeApp(firebaseConfig);
+}
+var auth = firebase.auth();
+var db = firebase.firestore();
+// Ensure globals
+window.auth = auth;
+window.db = db;
+
+function getDb() {
+  const d = (typeof window !== 'undefined' && window.db) ? window.db : (typeof db !== 'undefined' ? db : null);
+  if (!d) throw new Error('Database not initialized');
+  return d;
+}
+function getAuth() {
+  const a = (typeof window !== 'undefined' && window.auth) ? window.auth : (typeof auth !== 'undefined' ? auth : null);
+  if (!a) throw new Error('Auth not initialized');
+  return a;
+}
+
+
+let CU = null;
+let unsubLogs = null;
+let cachedEmployees = [];
+let cachedSchedules = [];
+
+// ── CLOCK ─────────────────────────────────────────────
+function tickClock(){
+  const n = new Date();
+  document.getElementById('liveClock').textContent = '⏰ ' + n.toLocaleString('en-PH', {dateStyle:'medium', timeStyle:'medium'});
+}
+setInterval(tickClock, 1000);
+tickClock();
+
+function showToast(msg, type='success'){
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = type === 'error' ? 'error' : '';
+  t.style.display = 'block';
+  setTimeout(() => t.style.display = 'none', 3000);
+}
+
+function closeModal(id){ document.getElementById(id).classList.remove('active'); }
+function showInfoModal(title, msg, icon='✅'){
+  document.getElementById('modalIcon').textContent = icon;
+  document.getElementById('modalTitle').textContent = title;
+  document.getElementById('modalMessage').textContent = msg;
+  document.getElementById('infoModal').classList.add('active');
+}
+
+// ── AUTH & LOGIN ──────────────────────────────────────
+async function doLogin() {
+  const userBox = document.getElementById('sysUsername').value.trim().toLowerCase();
+  const passBox = document.getElementById('sysPassword').value;
+  const errEl = document.getElementById('loginErr');
+  errEl.style.display = 'none';
+
+  if (!userBox || !passBox) {
+    errEl.textContent = '❌ Enter username and password.';
+    errEl.style.display = 'block';
+    return;
+  }
+
+  try {
+    const _auth = (typeof getAuth === 'function') ? getAuth() : (window.auth || auth);
+    const _db = (typeof getDb === 'function') ? getDb() : (window.db || db);
+    const email = userBox + '@yvp-timekeeping.internal';
+    await _auth.signInWithEmailAndPassword(email, passBox);
+
+    const userQuery = await _db.collection('users').where('username', '==', userBox).get();
+    if (userQuery.empty) {
+      errEl.textContent = '❌ Login works but user profile is missing in database. Ask admin to Create Login again.';
+      errEl.style.display = 'block';
+      await _auth.signOut();
+      return;
+    }
+
+    const userDoc = userQuery.docs[0];
+    CU = { uid: userDoc.id, ...userDoc.data() };
+    initSessionUI();
+  } catch (e) {
+    console.error('Login error:', e);
+    let msg = '❌ Invalid username or password.';
+    if (e && e.code === 'auth/user-not-found') {
+      msg = '❌ Account not found. Admin must click Create Login for this employee first.';
+    } else if (e && e.code === 'auth/wrong-password') {
+      msg = '❌ Wrong password.';
+    } else if (e && e.code === 'auth/invalid-credential') {
+      msg = '❌ Invalid credentials. If this is a new employee, admin must Create Login first. Default password is usually the YVP ID.';
+    } else if (e && e.code === 'auth/too-many-requests') {
+      msg = '❌ Too many attempts. Try again later.';
+    } else if (e && e.message && e.message.indexOf('Database') >= 0) {
+      msg = '❌ ' + e.message;
+    }
+    errEl.textContent = msg;
+    errEl.style.display = 'block';
+  }
+}
+
+async function doLogout() {
+
+  if (unsubLogs) unsubLogs();
+  await auth.signOut();
+  CU = null;
+  document.getElementById('mainApp').style.display = 'none';
+  document.getElementById('loginScreen').style.display = 'flex';
+}
+
+function initSessionUI() {
+
+  document.getElementById('loginScreen').style.display = 'none';
+  document.getElementById('mainApp').style.display = 'flex';
+  document.getElementById('sbName').textContent = CU.name || CU.username;
+  updateSidebarPosition();
+  document.getElementById('sbRole').textContent = CU.role === 'manager' ? 'Manager' : 'Rank & File';
+  updateSidebarPosition();
+  document.getElementById('sbAvatar').textContent = (CU.name || CU.username).charAt(0).toUpperCase();
+
+  buildSidebar(CU.role);
+  showSection('dashboard');
+  showToast('Welcome, ' + CU.name + '!');
+  setupRealtimeListeners();
+  preloadGlobalData();
+}
+
+function buildSidebar(role) {
+  let html = `<div class="nav-item active" data-section="dashboard" onclick="showSection('dashboard')">📊 Dashboard</div>`;
+  if (role === 'manager') {
+    html += `
+      <div class="nav-item" data-section="employees" onclick="showSection('employees')">👥 Employees</div>
+      <div class="nav-item" data-section="schedule" onclick="showSection('schedule')">📅 Work Schedule</div>
+      <div class="nav-item" data-section="reports" onclick="showSection('reports')">📈 Reports</div>
+      <div class="nav-item" data-section="payroll" onclick="showSection('payroll')">💰 Payroll</div>
+      <div class="nav-item" data-section="invoice" onclick="showSection('invoice')">🧾 Invoice</div>
+      <div class="nav-item" data-section="history" onclick="showSection('history')">📜 History</div>
+      <div class="nav-item" data-section="users" onclick="showSection('users')">🔐 Users</div>
+      <div class="nav-item" data-section="changepass" onclick="showChangePassword()">🔑 Change Password</div>
+    `;
+  } else {
+    html += `
+      <div class="nav-item" data-section="reports" onclick="showSection('reports')">📈 Attendance</div>
+      <div class="nav-item" data-section="changepass" onclick="showChangePassword()">🔑 Change Password</div>
+    `;
+  }
+  // Branding + version under menu
+  html += `
+    <div style="margin-top:18px;padding:12px 16px 8px;border-top:1px solid rgba(255,255,255,0.12);text-align:center">
+      <div style="color:rgba(255,255,255,0.55);font-size:10px;letter-spacing:0.3px">Powered by JAINova Studio</div>
+      <div style="color:rgba(255,255,255,0.7);font-size:11px;font-weight:600;margin-top:10px">YVP Timekeeping v1.0</div>
+    </div>
+  `;
+  document.getElementById('sidebarNav').innerHTML = html;
+}
+
+function showSection(id) {
+  document.querySelectorAll('.page-section').forEach(s => s.classList.remove('active'));
+  document.getElementById('sec-' + id).classList.add('active');
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  const nav = document.querySelector(`.nav-item[data-section="${id}"]`);
+  if (nav) nav.classList.add('active');
+
+  if (id === 'employees') loadEmployees();
+  if (id === 'schedule') loadSchedules();
+  if (id === 'reports') loadReports();
+  if (id === 'history') loadHistory();
+  if (id === 'invoice') { loadDepartmentsIntoInvoice().then(function(){ refreshInvoiceAgents(); }); }
+  if (id === 'invoiceTracker') loadInvoiceTracker();
+  if (id === 'payroll') loadPayroll();
+  if (id === 'users') loadUsers();
+}
+
+async function preloadGlobalData() {
+  // will refresh position after employees load
+
+  const [eSnap, sSnap] = await Promise.all([
+    db.collection('employees').get(),
+    db.collection('schedules').get()
+  ]);
+  cachedEmployees = eSnap.docs.map(d => d.data());
+  if (typeof updateSidebarPosition === "function") updateSidebarPosition();
+  cachedSchedules = sSnap.docs.map(d => d.data());
+  renderMySchedule();
+}
+
+
+// ── NAME + SCHEDULE HELPERS ───────────────────────────
+function getEmployeeFullName(empOrYvpId) {
+  let e = empOrYvpId;
+  if (typeof empOrYvpId === 'string') {
+    e = cachedEmployees.find(x => x.yvpId === empOrYvpId) || {};
+  }
+  return [e.lastName, e.firstName, e.middleName].filter(Boolean).join(' ') || e.name || empOrYvpId || '—';
+}
+
+function parseScheduleStartMinutes(shift) {
+  // e.g. "9PM - 6AM", "9:00 PM - 6:00 AM", "21:00-06:00"
+  if (!shift) return null;
+  const startPart = String(shift).split('-')[0].trim();
+  const m = startPart.match(/(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?/i);
+  if (!m) return null;
+  let h = parseInt(m[1], 10);
+  const min = parseInt(m[2] || '0', 10);
+  const ap = (m[3] || '').toUpperCase();
+  if (ap === 'PM' && h < 12) h += 12;
+  if (ap === 'AM' && h === 12) h = 0;
+  return h * 60 + min;
+}
+
+function parseTimeToMinutes(timeStr) {
+  if (!timeStr) return null;
+  const m = String(timeStr).match(/(\d{1,2}):(\d{2})(?::\d{2})?\s*(AM|PM)?/i);
+  if (!m) return null;
+  let h = parseInt(m[1], 10);
+  const min = parseInt(m[2], 10);
+  const ap = (m[3] || '').toUpperCase();
+  if (ap === 'PM' && h < 12) h += 12;
+  if (ap === 'AM' && h === 12) h = 0;
+  return h * 60 + min;
+}
+
+function minutesLate(schedShift, timeInStr) {
+  const start = parseScheduleStartMinutes(schedShift);
+  const inMin = parseTimeToMinutes(timeInStr);
+  if (start === null || inMin === null) return 0;
+  let late = inMin - start;
+  // overnight: if schedule starts evening and clock-in is early morning
+  if (late < -12 * 60) late += 24 * 60;
+  if (late < 0) late = 0;
+  return late;
+}
+
+function isScheduledOnDate(sched, dateISO) {
+  // dateISO = YYYY-MM-DD; sched.fromDate/toDate may be MM/DD/YYYY or YYYY-MM-DD
+  const toISO = (d) => {
+    if (!d) return '';
+    d = String(d);
+    if (d.includes('-') && d.length >= 10) return d.slice(0, 10);
+    if (d.includes('/')) {
+      const p = d.split('/');
+      if (p.length === 3) return `${p[2]}-${p[0].padStart(2,'0')}-${p[1].padStart(2,'0')}`;
+    }
+    return d;
+  };
+  const from = toISO(sched.fromDate || sched.date);
+  const to = toISO(sched.toDate || sched.fromDate || sched.date);
+  if (!from) return false;
+  return dateISO >= from && dateISO <= (to || from);
+}
+
+function getTodaySchedules() {
+  const today = new Date().toISOString().slice(0, 10);
+  return (cachedSchedules || []).filter(s => isScheduledOnDate(s, today));
+}
+
+function tardinessDeduction(lateMinutes) {
+  // $1 for every hour (or part) after first 3 hours of tardiness
+  // late > 180 min → $1, > 240 → $2, > 300 → $3, etc.
+  if (lateMinutes <= 180) return 0;
+  const extra = lateMinutes - 180;
+  return Math.ceil(extra / 60); // $1 per hour beyond 3 hours
+}
+
+// ── REALTIME LISTENERS ────────────────────────────────
+let liveAttendance = [];
+function setupRealtimeListeners() {
+  const today = new Date().toISOString().slice(0,10);
+  let q = db.collection('attendance').where('date', '==', today);
+  
+  if (CU.role !== 'manager') {
+    q = q.where('yvpId', '==', CU.yvpId);
+  }
+
+  unsubLogs = q.onSnapshot(snapshot => {
+    liveAttendance = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+    renderDashboard();
+    if (document.getElementById('sec-reports').classList.contains('active')) loadReports();
+  });
+}
+
+// ── ATTENDANCE & CLOCK OPERATIONS ─────────────────────
+function renderDashboard() {
+  const today = new Date().toISOString().slice(0,10);
+  const myLog = liveAttendance.find(l => l.yvpId === (CU.yvpId || CU.username) && l.date === today);
+  setTimeout(function(){ try { updateLunchBreakButtons(myLog); } catch(e){} }, 50);
+
+  const statusEl = document.getElementById('clockStatus');
+  const timesEl = document.getElementById('clockTimes');
+  const btnIn = document.getElementById('btnClockIn');
+  const btnOut = document.getElementById('btnClockOut');
+
+  btnIn.style.display = 'none';
+  btnOut.style.display = 'none';
+
+  if (!myLog || !myLog.timeIn) {
+    statusEl.innerHTML = '<span style="color:#e65100">Not clocked in today.</span>';
+    timesEl.textContent = '';
+    btnIn.style.display = 'inline-block';
+  } else if (myLog.timeIn && !myLog.timeOut) {
+    statusEl.innerHTML = '<span style="color:#2e7d32">Currently CLOCKED IN</span>';
+    timesEl.textContent = `Time In: ${myLog.timeIn}`;
+    btnOut.style.display = 'inline-block';
+  } else {
+    statusEl.innerHTML = '<span style="color:#1a237e">Shift Completed</span>';
+    timesEl.textContent = `In: ${myLog.timeIn} | Out: ${myLog.timeOut} | Hours: ${myLog.totalHours}`;
+  }
+
+  // Manager View — scheduled employees for today
+  const isMgr = CU.role === 'manager';
+  document.getElementById('todayAttendanceCard').style.display = isMgr ? 'block' : 'none';
+  if (isMgr) {
+    const today = new Date().toISOString().slice(0, 10);
+    const todayScheds = getTodaySchedules();
+    const scheduledIds = [...new Set(todayScheds.map(s => s.yvpId))];
+
+    // Build row per scheduled employee
+    const rows = scheduledIds.map(yvpId => {
+      const sched = todayScheds.find(s => s.yvpId === yvpId) || {};
+      const log = liveAttendance.find(l => l.yvpId === yvpId) || null;
+      const empName = getEmployeeFullName(yvpId);
+      const timeIn = log ? (log.timeIn || null) : null;
+      const timeOut = log ? (log.timeOut || null) : null;
+      let hours = log && log.totalHours ? log.totalHours : '—';
+      if (hours !== '—' && parseFloat(hours) > 6) hours = '6.00';
+
+      let status = 'ABSENT';
+      let badge = 'badge-danger';
+      let tardyText = '—';
+
+      if (timeIn && !timeOut) {
+        status = 'ACTIVE';
+        badge = 'badge-warning';
+        const late = minutesLate(sched.shift || sched.schedule, timeIn);
+        if (late > 0) {
+          status = 'TARDINESS';
+          badge = 'badge-warning';
+          tardyText = late + ' min late';
+        } else {
+          status = 'PRESENT';
+          badge = 'badge-info';
+        }
+      } else if (timeIn && timeOut) {
+        const late = minutesLate(sched.shift || sched.schedule, timeIn);
+        if (late > 0) {
+          status = 'TARDINESS';
+          badge = 'badge-warning';
+          tardyText = late + ' min late';
+        } else {
+          status = 'PRESENT';
+          badge = 'badge-success';
+        }
+      } else {
+        status = 'ABSENT';
+        badge = 'badge-danger';
+      }
+
+      return {
+        yvpId, empName, timeIn: timeIn || '—', timeOut: timeOut || '—',
+        hours, status, badge, tardyText, logId: log ? log.id : null
+      };
+    });
+
+    const present = rows.filter(r => r.status === 'PRESENT').length;
+    const active = rows.filter(r => r.status === 'ACTIVE').length;
+    const tardy = rows.filter(r => r.status === 'TARDINESS').length;
+    const absent = rows.filter(r => r.status === 'ABSENT').length;
+
+    document.getElementById('dashStats').innerHTML = `
+      <div class="stat-card"><div class="stat-label">Present</div><div class="stat-value">${present}</div></div>
+      <div class="stat-card orange"><div class="stat-label">Tardiness</div><div class="stat-value">${tardy}</div></div>
+      <div class="stat-card red"><div class="stat-label">Absent</div><div class="stat-value">${absent}</div></div>
+    `;
+
+    const tbody = document.getElementById('todayTbody');
+    if (!rows.length) {
+      tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;color:#999">No employees scheduled today. Upload work schedules first.</td></tr>`;
+    } else {
+      tbody.innerHTML = rows.map(r => `
+        <tr>
+          <td>${r.yvpId}</td>
+          <td>${r.empName}</td>
+          <td>${r.timeIn}</td>
+          <td>${r.timeOut}</td>
+          <td>${r.hours}</td>
+          <td><span class="badge ${r.badge}">${r.status}</span></td>
+          <td>${r.tardyText}</td>
+          <td style="white-space:nowrap">
+            <button class="btn btn-primary btn-sm" onclick="editAttendance('${r.yvpId}','${r.empName.replace(/'/g, "\'")}','${r.timeIn}','${r.timeOut}','${r.logId||''}')">Edit</button>
+            ${r.logId ? `<button class="btn btn-danger btn-sm" onclick="deleteLog('${r.logId}')">Del</button>` : ''}
+          </td>
+        </tr>
+      `).join('');
+    }
+  }
+}
+
+function renderMySchedule() {
+  const yvpId = CU.yvpId || CU.username;
+  const mySched = cachedSchedules.filter(s => s.yvpId === yvpId);
+  const tbody = document.getElementById('myScheduleTbody');
+  if (mySched.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="3" style="text-align:center;color:#999">No schedule assigned.</td></tr>`;
+  } else {
+    tbody.innerHTML = mySched.map(s => `
+      <tr><td>${s.fromDate}</td><td>${s.toDate}</td><td>${s.shift}</td></tr>
+    `).join('');
+  }
+}
+
+async function clockIn() {
+  try {
+    if (!(window.db || (typeof db !== 'undefined' && db))) {
+      showToast('Database not ready. Please refresh the page.', 'error');
+      return;
+    }
+    const dbRef = window.db || db;
+const today = new Date().toISOString().slice(0,10);
+    const yvpId = CU.yvpId || CU.username;
+    const docId = yvpId + '_' + today;
+    const now = new Date();
+    const timeNow = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
+
+    const ref = getDb().collection('attendance').doc(docId);
+    const doc = await ref.get();
+    if (doc.exists && doc.data().timeIn && !doc.data().timeOut) {
+      showToast('Already clocked in today.', 'error');
+      return;
+    }
+    if (doc.exists && doc.data().timeIn && doc.data().timeOut) {
+      showToast('You already completed your shift today.', 'error');
+      return;
+    }
+
+    await ref.set({
+      yvpId: yvpId,
+      name: (typeof getEmployeeFullName === 'function' ? getEmployeeFullName(CU.yvpId || CU.username) : null) || CU.name || CU.username,
+      date: today,
+      timeIn: timeNow,
+      timeInTs: firebase.firestore.FieldValue.serverTimestamp(),
+      timeOut: null,
+      totalHours: null,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+
+    // Immediate UI update
+    const st = document.getElementById('clockStatus');
+    const tm = document.getElementById('clockTimes');
+    const bi = document.getElementById('btnClockIn');
+    const bo = document.getElementById('btnClockOut');
+    var _cbl = document.getElementById('btnLunch');
+    const bb = document.getElementById('btnBreak');
+    if (st) st.innerHTML = '<span style="color:#2e7d32">Currently CLOCKED IN</span>';
+    if (tm) tm.textContent = 'Time In: ' + timeNow;
+    if (bi) bi.style.display = 'none';
+    if (bo) bo.style.display = 'inline-block';
+    if (_cbl) document.getElementById('btnLunch').style.display = 'inline-block';
+    var _btnBreakEl = document.getElementById('btnBreak'); if (_btnBreakEl) _btnBreakEl.style.display = 'inline-block';
+    // Push into local liveAttendance so dashboard table updates
+    try {
+      const existing = (liveAttendance || []).findIndex(l => l.yvpId === yvpId && l.date === today);
+      const row = { id: docId, yvpId, name: CU.name || CU.username, date: today, timeIn: timeNow, timeOut: null, totalHours: null };
+      if (existing >= 0) liveAttendance[existing] = Object.assign({}, liveAttendance[existing], row);
+      else { liveAttendance = liveAttendance || []; liveAttendance.push(row); }
+      if (typeof renderDashboard === 'function') renderDashboard();
+    } catch (e) { console.error(e); }
+    try {
+      var bl1 = document.getElementById('btnLunch'); if (bl1) document.getElementById('btnLunch').style.display = 'inline-block';
+      var bb1 = document.getElementById('btnBreak'); if (bb1) document.getElementById('btnBreak').style.display = 'inline-block';
+      var dl = document.getElementById('btnDoneLunch'); if (dl) dl.style.display = 'none';
+      var db = document.getElementById('btnDoneBreak'); if (db) db.style.display = 'none';
+    } catch(e) {}
+    try {
+      var _btnL = document.getElementById('btnLunch'); if (_btnL) _btnL.style.display = 'inline-block';
+      var _btnB = document.getElementById('btnBreak'); if (_btnB) _btnB.style.display = 'inline-block';
+    } catch(e) {}
+    document.getElementById('btnLunch').style.display = 'inline-block';
+    document.getElementById('btnBreak').style.display = 'inline-block';
+
+    if (typeof renderDashboard === 'function') renderDashboard();
+    if (typeof logAttendanceHistory === 'function') { logAttendanceHistory(yvpId, CU.name || CU.username, 'Clocked In at ' + timeNow); }
+    showInfoModal('Logged In Successfully', 'You have clocked in at ' + timeNow);
+  } catch (e) {
+    console.error('Clock In error:', e);
+    if (e && e.message && e.message.indexOf('bl is not defined') >= 0) { console.warn(e); } else { showToast('Clock In failed: ' + e.message, 'error'); };
+  }
+}
+
+async function clockOut() {
+  try {
+    const today = new Date().toISOString().slice(0,10);
+    const yvpId = CU.yvpId || CU.username;
+    const docId = yvpId + '_' + today;
+    const now = new Date();
+    const timeNow = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
+
+    const ref = getDb().collection('attendance').doc(docId);
+    const doc = await ref.get();
+    if (!doc.exists || !doc.data().timeIn || doc.data().timeOut) {
+      showToast('No active clock-in found.', 'error');
+      return;
+    }
+
+    // Calculate hours using timestamps when possible, cap at 6
+    let diffHours = 0;
+    const data = doc.data();
+    if (data.timeInTs && data.timeInTs.toDate) {
+      diffHours = (now - data.timeInTs.toDate()) / (1000 * 60 * 60);
+    } else {
+      // Fallback parse
+      const d1 = new Date(today + ' ' + data.timeIn);
+      const d2 = now;
+      diffHours = (d2 - d1) / (1000 * 60 * 60);
+      if (diffHours < 0) diffHours += 24; // overnight
+    }
+    // Maximum 6 hours per shift
+    if (diffHours > 6) diffHours = 6;
+    if (diffHours < 0) diffHours = 0;
+    const totalHours = diffHours.toFixed(2);
+
+    await ref.update({
+      timeOut: timeNow,
+      timeOutTs: firebase.firestore.FieldValue.serverTimestamp(),
+      totalHours: totalHours,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+
+    // Immediate UI update
+    document.getElementById('clockStatus').innerHTML = '<span style="color:#1a237e">Shift Completed</span>';
+    document.getElementById('clockTimes').textContent = 'In: ' + data.timeIn + ' | Out: ' + timeNow + ' | Hours: ' + totalHours;
+    document.getElementById('btnClockIn').style.display = 'none';
+    document.getElementById('btnClockOut').style.display = 'none';
+
+    if (typeof logAttendanceHistory === 'function') { logAttendanceHistory(yvpId, CU.name || CU.username, 'Clocked Out at ' + timeNow); }
+    showInfoModal('Logged Out Successfully', 'You have clocked out at ' + timeNow + '. Total hours: ' + totalHours + ' (max 6 hrs).');
+  } catch (e) {
+    console.error('Clock Out error:', e);
+    showToast('Clock Out failed: ' + e.message, 'error');
+  }
+}
+
+async function deleteLog(id) {
+  if (!confirm('Delete this attendance record?')) return;
+  try {
+    let prev = {};
+    try { const p = await getDb().collection('attendance').doc(id).get(); if (p.exists) prev = p.data(); } catch(e){}
+    await getDb().collection('attendance').doc(id).delete();
+    if (typeof logAttendanceHistory === 'function') {
+      await logAttendanceHistory(prev.yvpId, prev.name, 'Attendance record deleted (Time-In: ' + (prev.timeIn||'—') + ', Time-Out: ' + (prev.timeOut||'—') + ')');
+    }
+    showToast('Record deleted');
+    if (typeof loadReports === 'function') loadReports();
+    if (typeof renderDashboard === 'function') renderDashboard();
+  } catch (e) {
+    console.error(e);
+    showToast('Failed to delete: ' + e.message, 'error');
+  }
+}
+
+// ── EMPLOYEES MANAGEMENT ──────────────────────────────
+
+
+function showEmpForm() {
+  document.getElementById('empForm').style.display = 'block';
+  ['fId','fLast','fFirst','fRate','fEditId'].forEach(id => document.getElementById(id).value = '');
+}
+
+async function saveEmployee() {
+  const yvpId = document.getElementById('fId').value.trim();
+  const lastName = document.getElementById('fLast').value.trim();
+  const firstName = document.getElementById('fFirst').value.trim();
+  const hourlyRate = parseFloat(document.getElementById('fRate').value) || 0;
+
+  if (!yvpId || !lastName || !firstName) {
+    showToast('Required fields missing.', 'error');
+    return;
+  }
+
+  await db.collection('employees').doc(yvpId).set({
+    yvpId, lastName, firstName, hourlyRate,
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+  }, { merge: true });
+
+  document.getElementById('empForm').style.display = 'none';
+  loadEmployees();
+  preloadGlobalData();
+  showToast('Employee saved.');
+}
+
+async function editEmp(yvpId) {
+  const doc = await db.collection('employees').doc(yvpId).get();
+  if (!doc.exists) return;
+  const e = doc.data();
+  showEmpForm();
+  document.getElementById('fId').value = e.yvpId;
+  document.getElementById('fLast').value = e.lastName;
+  document.getElementById('fFirst').value = e.firstName;
+  document.getElementById('fRate').value = e.hourlyRate;
+}
+
+// ── SCHEDULES, REPORTS, PAYROLL, USERS ────────────────
+async function loadSchedules() {
+  const snap = await db.collection('schedules').get();
+  const scheds = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  document.getElementById('schedTbody').innerHTML = scheds.length ? scheds.map(s => `
+    <tr>
+      <td>${s.yvpId}</td>
+      <td>${s.fromDate || '—'}</td>
+      <td>${s.toDate || '—'}</td>
+      <td>${s.shift || s.schedule || '—'}</td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-primary btn-sm" onclick="editSchedule('${s.id}')">Edit</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteSchedule('${s.id}')">Delete</button>
+      </td>
+    </tr>
+  `).join('') : `<tr><td colspan="5" style="text-align:center;color:#999">No schedules found</td></tr>`;
+}
+
+async function editSchedule(docId) {
+  const doc = await db.collection('schedules').doc(docId).get();
+  if (!doc.exists) { showToast('Schedule not found', 'error'); return; }
+  const s = doc.data();
+  document.getElementById('editSchedDocId').value = docId;
+  document.getElementById('editSchedYvpId').value = s.yvpId || '';
+  document.getElementById('editSchedFrom').value = s.fromDate || '';
+  document.getElementById('editSchedTo').value = s.toDate || '';
+  document.getElementById('editSchedShift').value = s.shift || s.schedule || '';
+  document.getElementById('editSchedModal').classList.add('active');
+}
+
+async function saveEditSchedule() {
+  const docId = document.getElementById('editSchedDocId').value;
+  const fromDate = document.getElementById('editSchedFrom').value.trim();
+  const toDate = document.getElementById('editSchedTo').value.trim();
+  const shift = document.getElementById('editSchedShift').value.trim();
+  if (!fromDate || !toDate || !shift) {
+    showToast('From Date, To Date and Schedule are required', 'error');
+    return;
+  }
+  try {
+    await db.collection('schedules').doc(docId).update({
+      fromDate, toDate, shift,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    closeModal('editSchedModal');
+    loadSchedules();
+    preloadGlobalData();
+    showToast('Schedule updated');
+  } catch (e) {
+    console.error(e);
+    showToast('Failed to update schedule', 'error');
+  }
+}
+
+async function deleteSchedule(docId) {
+  if (!confirm('Delete this schedule?')) return;
+  try {
+    await db.collection('schedules').doc(docId).delete();
+    loadSchedules();
+    preloadGlobalData();
+    showToast('Schedule deleted');
+  } catch (e) {
+    showToast('Failed to delete', 'error');
+  }
+}
+
+async function loadReports() {
+  let q = getDb().collection('attendance');
+  if (CU.role !== 'manager') q = q.where('yvpId', '==', CU.yvpId);
+  const snap = await q.get();
+  let logs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+  // Add ABSENT rows for scheduled employees with no attendance on those dates
+  try {
+    const scheds = cachedSchedules || [];
+    const empMap = {};
+    (cachedEmployees || []).forEach(e => { empMap[e.yvpId] = e; });
+
+    // Build set of existing attendance keys yvpId_date
+    const existing = new Set(logs.map(l => (l.yvpId || '') + '_' + (l.date || '')));
+
+    // For each schedule, expand date range (limit safety: 90 days)
+    scheds.forEach(s => {
+      if (CU.role !== 'manager' && s.yvpId !== CU.yvpId) return;
+      const toISO = (d) => {
+        if (!d) return null;
+        d = String(d).trim();
+        if (d.includes('T')) d = d.slice(0, 10);
+        if (/^\d{4}-\d{2}-\d{2}$/.test(d)) return d;
+        if (d.includes('/')) {
+          const p = d.split('/');
+          if (p.length === 3) {
+            // MM/DD/YYYY or M/D/YYYY
+            const mm = p[0].padStart(2,'0');
+            const dd = p[1].padStart(2,'0');
+            let yy = p[2];
+            if (yy.length === 2) yy = '20' + yy;
+            return yy + '-' + mm + '-' + dd;
+          }
+        }
+        const t = Date.parse(d);
+        if (!isNaN(t)) {
+          const x = new Date(t);
+          return x.getFullYear() + '-' + String(x.getMonth()+1).padStart(2,'0') + '-' + String(x.getDate()).padStart(2,'0');
+        }
+        return d;
+      };
+      let from = toISO(s.fromDate || s.date);
+      let to = toISO(s.toDate || s.fromDate || s.date);
+      if (!from) return;
+      if (!to) to = from;
+      const start = new Date(from + 'T00:00:00');
+      const end = new Date(to + 'T00:00:00');
+      if (isNaN(start) || isNaN(end)) return;
+      let days = 0;
+      for (let d = new Date(start); d <= end && days < 90; d.setDate(d.getDate() + 1), days++) {
+        const iso = d.toISOString().slice(0, 10);
+        // only up to today
+        const today = new Date().toISOString().slice(0, 10);
+        if (iso > today) continue;
+        const key = (s.yvpId || '') + '_' + iso;
+        if (existing.has(key)) continue;
+        existing.add(key);
+        const emp = empMap[s.yvpId] || {};
+        const name = (typeof getEmployeeFullName === 'function' ? getEmployeeFullName(s.yvpId) : null)
+          || [emp.firstName, emp.lastName].filter(Boolean).join(' ') || s.yvpId;
+        logs.push({
+          id: 'absent_' + key,
+          yvpId: s.yvpId,
+          name: name,
+          date: iso,
+          timeIn: null,
+          timeOut: null,
+          totalHours: null,
+          isSyntheticAbsent: true
+        });
+      }
+    });
+  } catch (e) { console.error('Absent expand error', e); }
+
+  logs.sort((a,b) => (b.date + (b.timeIn||'')).localeCompare(a.date + (a.timeIn||'')));
+
+  document.getElementById('rptTbody').innerHTML = logs.length ? logs.map(l => {
+    let hrs = l.totalHours || '—';
+    if (hrs !== '—' && parseFloat(hrs) > 6) hrs = '6.00';
+    const name = getEmployeeFullName(l.yvpId) || l.name || '—';
+    const sched = (cachedSchedules || []).find(s => s.yvpId === l.yvpId && isScheduledOnDate(s, l.date));
+    let late = 0;
+    if (l.timeIn && sched) late = minutesLate(sched.shift || sched.schedule, l.timeIn);
+    const isAbsent = !l.timeIn && !l.timeOut;
+    const status = isAbsent ? 'ABSENT' : (l.timeOut ? (late > 0 ? 'TARDINESS' : 'PRESENT') : 'ACTIVE');
+    const lunchMin = (l.lunchMinutes != null) ? l.lunchMinutes : '—';
+    const breakMin = (l.breakMinutes != null) ? l.breakMinutes : '—';
+    let actBtns = '';
+    if (CU.role === 'manager') {
+      const safeName = (name||'').replace(/'/g, "\'");
+      const editId = l.isSyntheticAbsent ? ((l.yvpId||'') + '_' + (l.date||'')) : l.id;
+      actBtns = `<button class="btn btn-primary btn-sm" onclick="editAttendanceFromReport('${editId}','${l.yvpId}','${safeName}','${l.date||''}','${l.timeIn||''}','${l.timeOut||''}')">Edit</button>`;
+      if (!l.isSyntheticAbsent && l.id) {
+        actBtns += ` <button class="btn btn-danger btn-sm" onclick="deleteLog('${l.id}')">Delete</button>`;
+      }
+    }
+    return `<tr>
+      <td>${l.yvpId}</td>
+      <td>${name}</td>
+      <td>${l.date}</td>
+      <td>${l.timeIn || '—'}</td>
+      <td>${l.timeOut || '—'}</td>
+      <td>${isAbsent ? '—' : hrs}</td>
+      <td><span class="badge ${status==='ABSENT'?'badge-danger':status==='TARDINESS'?'badge-warning':status==='ACTIVE'?'badge-info':'badge-success'}">${status}</span></td>
+      <td>${late > 0 ? late + ' min' : '—'}</td>
+      <td>${lunchMin}</td>
+      <td>${breakMin}</td>
+      <td>${isAbsent ? 'Yes' : 'No'}</td>
+      <td style="white-space:nowrap">${actBtns}</td>
+    </tr>`;
+  }).join('') : `<tr><td colspan="12" style="text-align:center;color:#999">No attendance records</td></tr>`;
+}
+
+
+function calcMinutesBetween(startStr, endStr, dateISO) {
+  const a = parseTimeForHours(startStr, dateISO || new Date().toISOString().slice(0,10));
+  const b = parseTimeForHours(endStr, dateISO || new Date().toISOString().slice(0,10));
+  if (!a || !b) return '—';
+  let mins = Math.round((b - a) / 60000);
+  if (mins < 0) mins += 24 * 60;
+  return mins;
+}
+
+async function loadPayroll() {
+  const fromDate = (document.getElementById('payFromDate') || {}).value || '';
+  const toDate = (document.getElementById('payToDate') || {}).value || '';
+
+  const eSnap = await getDb().collection('employees').get();
+  const rates = {};
+  const depts = {};
+  eSnap.docs.forEach(d => {
+    const e = d.data();
+    rates[e.yvpId] = parseFloat(e.hourlyRate) || 0;
+    depts[e.yvpId] = e.department || '';
+  });
+
+  const aSnap = await getDb().collection('attendance').get();
+  const summary = {};
+
+  aSnap.docs.forEach(d => {
+    const l = d.data();
+    if (fromDate && l.date < fromDate) return;
+    if (toDate && l.date > toDate) return;
+    if (!l.timeIn || !l.timeOut) return;
+    const yvpId = l.yvpId;
+    if (!summary[yvpId]) {
+      summary[yvpId] = { name: (typeof getEmployeeFullName === 'function' ? getEmployeeFullName(yvpId) : null) || l.name, hours: 0 };
+    }
+    let hrs = parseFloat(l.totalHours) || 0;
+    if (hrs > 6) hrs = 6;
+    summary[yvpId].hours += hrs;
+  });
+
+  const tbody = document.getElementById('payrollTbody');
+  const ids = Object.keys(summary).sort();
+  if (!ids.length) {
+    tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:#999">No data in selected period</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = ids.map(id => {
+    const s = summary[id];
+    const rate = rates[id] || 0;
+    const billing = s.hours * rate;
+    return `<tr>
+      <td>${id}</td>
+      <td>${s.name}</td>
+      <td>${depts[id] || '—'}</td>
+      <td>${(Math.round(s.hours * 100) / 100)}</td>
+      <td>$${Math.round(rate)}</td>
+      <td><b>$${billing.toFixed(2)}</b></td>
+    </tr>`;
+  }).join('');
+}
+
+
+
+// ── BULK EMPLOYEE UPLOAD / TEMPLATE ───────────────────
+function downloadEmpTemplate() {
+  const headers = ["YVP ID","Last Name","First Name","Middle Name","Position","Department","Hourly Rate","Birthday","Address","Email Address","Contact Number"];
+  const sample = ["YVP-0001","Dela Cruz","Juan","Santos","Staff","15.00","1995-06-15","123 Main St","juan@email.com","09171234567"];
+  const ws = XLSX.utils.aoa_to_sheet([headers, sample]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "New Hires");
+  XLSX.writeFile(wb, "YVP_New_Hires_Template.xlsx");
+  showToast("Employee template downloaded");
+}
+
+async function handleEmpUpload(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const status = document.getElementById("empUploadStatus");
+  status.textContent = "Uploading...";
+  const reader = new FileReader();
+  reader.onload = async function(e) {
+    try {
+      const data = new Uint8Array(e.target.result);
+      const workbook = XLSX.read(data, {type:"array"});
+      const rows = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], {defval:""});
+      let added = 0, skipped = 0;
+      for (const row of rows) {
+        const get = (...keys) => { for (const k of keys) if (row[k] !== undefined && String(row[k]).trim()) return String(row[k]).trim(); return ""; };
+        const yvpId = get("YVP ID","YVPID","ID");
+        const lastName = get("Last Name","Lastname");
+        const firstName = get("First Name","Firstname");
+        if (!yvpId || !lastName || !firstName) { skipped++; continue; }
+        await db.collection("employees").doc(yvpId).set({
+          yvpId, lastName, firstName,
+          middleName: get("Middle Name","Middlename"),
+          position: get("Position","Job Title"),
+          department: get("Department","Dept"),
+          hourlyRate: parseFloat(get("Hourly Rate","Rate")) || 0,
+          birthday: get("Birthday","Birthdate"),
+          address: get("Address"),
+          email: get("Email Address","Email"),
+          contact: get("Contact Number","Contact","Phone"),
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        }, {merge:true});
+        added++;
+      }
+      status.textContent = `✅ ${added} added` + (skipped ? ` | ${skipped} skipped` : "");
+      showToast(`Uploaded ${added} employees`);
+      loadEmployees();
+      preloadGlobalData();
+    } catch(err) {
+      console.error(err);
+      status.textContent = "Error";
+      showToast("Upload failed", "error");
+    }
+    event.target.value = "";
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+// ── WORK SCHEDULE BULK ────────────────────────────────
+function downloadSchedTemplate() {
+  const headers = ["YVP ID","From Date","To Date","Schedule"];
+  const sample = ["YVP-0001","09/01/2026","09/07/2026","9PM - 6AM"];
+  const ws = XLSX.utils.aoa_to_sheet([headers, sample]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Schedules");
+  XLSX.writeFile(wb, "YVP_Work_Schedule_Template.xlsx");
+  showToast("Schedule template downloaded");
+}
+
+function parseDateFlex(raw) {
+  if (!raw) return {display:"", iso:""};
+  let display = String(raw), iso = String(raw);
+  if (display.includes("/")) {
+    const p = display.split("/");
+    if (p.length === 3) {
+      display = `${p[0].padStart(2,"0")}/${p[1].padStart(2,"0")}/${p[2]}`;
+      iso = `${p[2]}-${p[0].padStart(2,"0")}-${p[1].padStart(2,"0")}`;
+    }
+  }
+  return {display, iso};
+}
+
+async function handleSchedUpload(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const status = document.getElementById("schedUploadStatus");
+  status.textContent = "Uploading...";
+  const reader = new FileReader();
+  reader.onload = async function(e) {
+    try {
+      const data = new Uint8Array(e.target.result);
+      const workbook = XLSX.read(data, {type:"array"});
+      const rows = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], {defval:""});
+      let added = 0, skipped = 0;
+      for (const row of rows) {
+        const get = (...keys) => { for (const k of keys) if (row[k] !== undefined && String(row[k]).trim()) return String(row[k]).trim(); return ""; };
+        const yvpId = get("YVP ID","YVPID","ID");
+        const fromRaw = get("From Date","From","Start Date");
+        const toRaw = get("To Date","To","End Date");
+        const shift = get("Schedule","Shift","Work Schedule");
+        if (!yvpId || !fromRaw || !shift) { skipped++; continue; }
+        const from = parseDateFlex(fromRaw);
+        const to = toRaw ? parseDateFlex(toRaw) : from;
+        const docId = `${yvpId}_${from.iso}`;
+        await db.collection("schedules").doc(docId).set({
+          yvpId,
+          fromDate: from.display || from.iso,
+          toDate: to.display || to.iso,
+          shift,
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        }, {merge:true});
+        added++;
+      }
+      status.textContent = `✅ ${added} added` + (skipped ? ` | ${skipped} skipped` : "");
+      showToast(`Uploaded ${added} schedules`);
+      loadSchedules();
+      preloadGlobalData();
+    } catch(err) {
+      console.error(err);
+      status.textContent = "Error";
+      showToast("Upload failed", "error");
+    }
+    event.target.value = "";
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+async function exportWorkSchedules() {
+  const snap = await db.collection("schedules").get();
+  if (snap.empty) { showToast("No schedules to export","error"); return; }
+  const headers = ["YVP ID","From Date","To Date","Schedule"];
+  const rows = snap.docs.map(d => {
+    const s = d.data();
+    return [s.yvpId, s.fromDate||"", s.toDate||"", s.shift||""];
+  });
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Work Schedules");
+  XLSX.writeFile(wb, `YVP_Work_Schedules_${new Date().toISOString().slice(0,10)}.xlsx`);
+  showToast("Schedules exported");
+}
+
+// ── EXPORT ATTENDANCE & PAYROLL ───────────────────────
+async function exportAttendanceReport() {
+  let q = db.collection('attendance');
+  if (CU.role !== 'manager') q = q.where('yvpId', '==', CU.yvpId);
+  const snap = await q.get();
+  let logs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  logs.sort((a,b) => (b.date + (b.timeIn||'')).localeCompare(a.date + (a.timeIn||'')));
+
+  const headers = ["YVP ID","Name","Date","Time In","Time Out","Total Hours","Status","Tardiness (min)","Lunch (min)","Break (min)","Absent"];
+  const rows = logs.map(l => {
+    let hrs = l.totalHours || '';
+    if (hrs !== '' && parseFloat(hrs) > 6) hrs = '6.00';
+    const name = (typeof getEmployeeFullName === 'function' ? getEmployeeFullName(l.yvpId) : null) || l.name || '';
+    const sched = (cachedSchedules || []).find(s => s.yvpId === l.yvpId && typeof isScheduledOnDate === 'function' && isScheduledOnDate(s, l.date));
+    let late = 0;
+    if (l.timeIn && sched && typeof minutesLate === 'function') {
+      late = minutesLate(sched.shift || sched.schedule, l.timeIn);
+    }
+    const isAbsent = !l.timeIn && !l.timeOut;
+    const status = isAbsent ? 'ABSENT' : (l.timeOut ? (late > 0 ? 'TARDINESS' : 'PRESENT') : 'ACTIVE');
+    const lunchMin = (l.lunchMinutes != null) ? l.lunchMinutes : '';
+    const breakMin = (l.breakMinutes != null) ? l.breakMinutes : '';
+    return [
+      l.yvpId || '',
+      name,
+      l.date || '',
+      l.timeIn || '',
+      l.timeOut || '',
+      hrs,
+      status,
+      late > 0 ? late : '',
+      lunchMin,
+      breakMin,
+      isAbsent ? 'Yes' : 'No'
+    ];
+  });
+
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Attendance");
+  XLSX.writeFile(wb, 'YVP_Attendance_' + new Date().toISOString().slice(0,10) + '.xlsx');
+  showToast('Attendance report downloaded');
+}
+
+async function exportPayrollReport() {
+  const fromDate = (document.getElementById('payFromDate') || {}).value || '';
+  const toDate = (document.getElementById('payToDate') || {}).value || '';
+  const eSnap = await getDb().collection("employees").get();
+  const rates = {};
+  const depts = {};
+  eSnap.docs.forEach(d => { rates[d.data().yvpId] = parseFloat(d.data().hourlyRate) || 0; depts[d.data().yvpId] = d.data().department || ''; });
+  const aSnap = await getDb().collection("attendance").get();
+  const summary = {};
+  aSnap.docs.forEach(d => {
+    const l = d.data();
+    if (fromDate && l.date < fromDate) return;
+    if (toDate && l.date > toDate) return;
+    if (!l.timeIn || !l.timeOut) return;
+    const yvpId = l.yvpId;
+    if (!summary[yvpId]) summary[yvpId] = { name: (typeof getEmployeeFullName === 'function' ? getEmployeeFullName(yvpId) : null) || l.name, hours: 0 };
+    let hrs = parseFloat(l.totalHours) || 0;
+    if (hrs > 6) hrs = 6;
+    summary[yvpId].hours += hrs;
+  });
+  const ids = Object.keys(summary).sort();
+  if (!ids.length) { showToast("No data in selected period", "error"); return; }
+  const headers = ["YVP ID","Name","Department","Total Hours","Hourly Rate","Total Billing"];
+  const rows = ids.map(id => {
+    const s = summary[id];
+    const rate = rates[id] || 0;
+    const billing = s.hours * rate;
+    return [id, s.name, depts[id]||'', Math.round(s.hours*100)/100, '$'+Math.round(rate), '$'+billing.toFixed(2)];
+  });
+  const totalH = rows.reduce((s,r)=>s+(parseFloat(r[3])||0),0);
+  const totalB = ids.reduce((s,id)=>s+(summary[id].hours*(rates[id]||0)),0);
+  rows.push(["","TOTAL","", Math.round(totalH*100)/100, "", '$'+totalB.toFixed(2)]);
+  const periodLabel = (fromDate||toDate) ? ('Period: '+(fromDate||'...')+' to '+(toDate||'...')) : 'Period: All dates';
+  const ws = XLSX.utils.aoa_to_sheet([[periodLabel], [], headers, ...rows]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Payroll");
+  XLSX.writeFile(wb, 'YVP_Payroll_'+(fromDate||'all')+'_'+(toDate||'all')+'.xlsx');
+  showToast("Payroll report downloaded");
+}
+
+// ── USER ACCOUNT CREATION ─────────────────────────────
+function showAddUserForm() {
+  document.getElementById("addUserForm").style.display = "block";
+  document.getElementById("newUserYvpId").value = "";
+  document.getElementById("newUserRole").value = "rank_file";
+}
+
+async function createUserAccount() {
+  const yvpId = document.getElementById("newUserYvpId").value.trim();
+  const role = document.getElementById("newUserRole").value;
+  if (!yvpId) { showToast("Enter YVP ID","error"); return; }
+
+  const empDoc = await db.collection("employees").doc(yvpId).get();
+  if (!empDoc.exists) { showToast("YVP ID not found in Employees. Add employee first.","error"); return; }
+  const emp = empDoc.data();
+  const fullName = `${emp.firstName||""} ${emp.lastName||""}`.trim();
+  const username = yvpId.toLowerCase().replace(/\s+/g,"");
+  const password = yvpId;
+  const email = `${username}@yvp-timekeeping.internal`;
+
+  // Check if user already exists
+  const existing = await db.collection("users").where("username","==",username).get();
+  if (!existing.empty) { showToast("User account already exists","error"); return; }
+
+  try {
+    // Create Auth account
+    const cred = await auth.createUserWithEmailAndPassword(email, password);
+    // Create Firestore profile
+    await db.collection("users").doc(cred.user.uid).set({
+      username, name: fullName, role, yvpId, email,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    document.getElementById("addUserForm").style.display = "none";
+    loadUsers();
+    showToast(`Account created. Username: ${username} | Password: ${password}`);
+  } catch(e) {
+    console.error(e);
+    // If auth user already exists, still create firestore doc
+    if (e.code === "auth/email-already-in-use") {
+      await db.collection("users").add({
+        username, name: fullName, role, yvpId, email,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      loadUsers();
+      showToast(`Profile created (auth already existed). Username: ${username}`);
+    } else {
+      showToast("Failed to create account: " + e.message, "error");
+    }
+  }
+}
+
+async function createAllRankFileLogins() {
+  const eSnap = await db.collection("employees").get();
+  const uSnap = await db.collection("users").get();
+  const existingUsernames = new Set(uSnap.docs.map(d => (d.data().username||"").toLowerCase()));
+  let created = 0, skipped = 0;
+
+  for (const doc of eSnap.docs) {
+    const emp = doc.data();
+    const username = (emp.yvpId||"").toLowerCase().replace(/\s+/g,"");
+    if (!username || existingUsernames.has(username)) { skipped++; continue; }
+    const fullName = `${emp.firstName||""} ${emp.lastName||""}`.trim();
+    const email = `${username}@yvp-timekeeping.internal`;
+    const password = emp.yvpId;
+    try {
+      const cred = await auth.createUserWithEmailAndPassword(email, password);
+      await db.collection("users").doc(cred.user.uid).set({
+        username, name: fullName, role: "rank_file", yvpId: emp.yvpId, email,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      existingUsernames.add(username);
+      created++;
+    } catch(e) {
+      if (e.code === "auth/email-already-in-use") {
+        await db.collection("users").add({
+          username, name: fullName, role: "rank_file", yvpId: emp.yvpId, email,
+          createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+        created++;
+      } else {
+        skipped++;
+      }
+    }
+  }
+  showToast(`Created ${created} Rank & File login(s). ${skipped} skipped.`);
+  loadUsers();
+}
+
+// ── PROFILE PICTURE ───────────────────────────────────
+async function handleProfilePicUpload(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  if (!file.type.startsWith("image/")) {
+    showToast("Please select an image file", "error");
+    return;
+  }
+  if (file.size > 5 * 1024 * 1024) {
+    showToast("Image must be under 5MB", "error");
+    return;
+  }
+
+  try {
+    // Resize/compress to passport-ish size to fit Firestore limits
+    const dataUrl = await resizeImageToDataURL(file, 240, 320, 0.7);
+
+    // Show immediately on avatar
+    const av = document.getElementById("sbAvatar");
+    if (av) {
+      av.style.backgroundImage = "url(" + dataUrl + ")";
+      av.style.backgroundSize = "cover";
+      av.style.backgroundPosition = "center";
+      av.textContent = "";
+    }
+
+    // Resolve user doc id
+    let uid = CU && CU.uid ? CU.uid : null;
+    if (!uid && CU && CU.username) {
+      const q = await db.collection("users").where("username", "==", CU.username).limit(1).get();
+      if (!q.empty) uid = q.docs[0].id;
+    }
+
+    if (uid) {
+      await db.collection("users").doc(uid).set({ photoURL: dataUrl }, { merge: true });
+      CU.uid = uid;
+      CU.photoURL = dataUrl;
+      showToast("Profile photo updated");
+    } else {
+      // Fallback: keep on screen for this session
+      if (CU) CU.photoURL = dataUrl;
+      showToast("Photo shown (could not save to account — missing user id)", "error");
+    }
+  } catch (err) {
+    console.error("Photo upload error:", err);
+    showToast("Failed to upload photo: " + (err.message || "unknown error"), "error");
+  }
+  event.target.value = "";
+}
+
+function resizeImageToDataURL(file, maxW, maxH, quality) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Could not read file"));
+    reader.onload = function(e) {
+      const img = new Image();
+      img.onerror = () => reject(new Error("Invalid image"));
+      img.onload = function() {
+        let w = img.width;
+        let h = img.height;
+        const ratio = Math.min(maxW / w, maxH / h, 1);
+        w = Math.round(w * ratio);
+        h = Math.round(h * ratio);
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, w, h);
+        try {
+          resolve(canvas.toDataURL("image/jpeg", quality || 0.7));
+        } catch (err) {
+          reject(err);
+        }
+      };
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+// Update loadUsers to show more columns + actions
+
+
+// Improve saveEmployee to include all fields
+async function saveEmployee() {
+  const yvpId = document.getElementById("fId").value.trim();
+  const lastName = document.getElementById("fLast").value.trim();
+  const firstName = document.getElementById("fFirst").value.trim();
+  if (!yvpId || !lastName || !firstName) {
+    showToast("YVP ID, Last Name and First Name are required","error");
+    return;
+  }
+  const data = {
+    yvpId, lastName, firstName,
+    middleName: (document.getElementById("fMid")||{}).value || "",
+    position: (document.getElementById("fPosition")||{}).value || "",
+    department: (document.getElementById("fDepartment")||{}).value || "",
+    hourlyRate: parseFloat((document.getElementById("fRate")||{}).value) || 0,
+    birthday: (document.getElementById("fBday")||{}).value || "",
+    email: (document.getElementById("fEmail")||{}).value || "",
+    contact: (document.getElementById("fContact")||{}).value || "",
+    address: (document.getElementById("fAddr")||{}).value || "",
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+  };
+  await db.collection("employees").doc(yvpId).set(data, {merge:true});
+  document.getElementById("empForm").style.display = "none";
+  loadEmployees();
+  preloadGlobalData();
+  showToast("Employee saved");
+}
+
+async function editEmp(yvpId) {
+  const doc = await db.collection("employees").doc(yvpId).get();
+  if (!doc.exists) return;
+  const e = doc.data();
+  showEmpForm();
+  document.getElementById("empFormTitle").textContent = "✏️ Edit Employee";
+  document.getElementById("fId").value = e.yvpId || "";
+  document.getElementById("fLast").value = e.lastName || "";
+  document.getElementById("fFirst").value = e.firstName || "";
+  if (document.getElementById("fMid")) document.getElementById("fMid").value = e.middleName || "";
+  if (document.getElementById("fPosition")) document.getElementById("fPosition").value = e.position || "";
+  if (document.getElementById("fDepartment")) document.getElementById("fDepartment").value = e.department || "";
+  document.getElementById("fRate").value = e.hourlyRate || "";
+  if (document.getElementById("fBday")) document.getElementById("fBday").value = e.birthday || "";
+  if (document.getElementById("fEmail")) document.getElementById("fEmail").value = e.email || "";
+  if (document.getElementById("fContact")) document.getElementById("fContact").value = e.contact || "";
+  if (document.getElementById("fAddr")) document.getElementById("fAddr").value = e.address || "";
+  document.getElementById("fEditId").value = e.yvpId;
+}
+
+function showEmpForm() {
+  document.getElementById("empForm").style.display = "block";
+  document.getElementById("empFormTitle").textContent = "➕ Add Employee";
+  ["fId","fLast","fFirst","fMid","fPosition","fDepartment","fRate","fBday","fEmail","fContact","fAddr","fEditId"].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = "";
+  });
+}
+
+// Load photo on session start
+const _origInit = initSessionUI;
+initSessionUI = function() {
+  _origInit();
+  if (CU && CU.photoURL) {
+    const av = document.getElementById("sbAvatar");
+    av.style.backgroundImage = `url(${CU.photoURL})`;
+    av.style.backgroundSize = "cover";
+    av.style.backgroundPosition = "center";
+    av.textContent = "";
+  }
+};
+
+
+
+
+
+
+
+
+// ── EDIT USER ACCESS ──────────────────────────────────
+function editUserAccess(uid, username, currentRole) {
+  document.getElementById('editAccessUid').value = uid;
+  document.getElementById('editAccessUsername').value = username;
+  document.getElementById('editAccessRole').value = currentRole === 'manager' ? 'manager' : 'rank_file';
+  document.getElementById('editAccessModal').classList.add('active');
+}
+
+async function saveUserAccess() {
+  const uid = document.getElementById('editAccessUid').value;
+  const newRole = document.getElementById('editAccessRole').value;
+  const username = document.getElementById('editAccessUsername').value;
+  if (!uid) { showToast('User not found', 'error'); return; }
+  if (username === 'admin' && newRole !== 'manager') {
+    showToast('Main admin must remain Manager', 'error'); return;
+  }
+  try {
+    await db.collection('users').doc(uid).update({ role: newRole });
+    closeModal('editAccessModal');
+    loadUsers();
+    showToast('User access updated to ' + (newRole === 'manager' ? 'Manager' : 'Rank & File'));
+  } catch (e) {
+    console.error(e);
+    showToast('Failed to update role', 'error');
+  }
+}
+
+async function deleteUserAccount(uid, username) {
+  if (username === 'admin' || String(username||'').toLowerCase() === 'admin') { showToast('Cannot delete main admin account', 'error'); return; }
+  if (!confirm('Delete user account "' + username + '"?')) return;
+  try {
+    await db.collection('users').doc(uid).delete();
+    showToast('User account deleted');
+    loadUsers();
+  } catch (e) {
+    console.error(e);
+    showToast('Failed to delete user', 'error');
+  }
+}
+
+function showResetPasswordForEmployee(yvpId, displayName) {
+  document.getElementById('resetYvpId').value = yvpId;
+  document.getElementById('resetUserDisplay').value = (displayName || '') + ' (' + yvpId + ')';
+  document.getElementById('resetNewPassword').value = '';
+  document.getElementById('resetConfirmPassword').value = '';
+  document.getElementById('resetPassModal').classList.add('active');
+}
+
+async function saveResetPassword() {
+  const yvpId = document.getElementById('resetYvpId').value;
+  const newPass = document.getElementById('resetNewPassword').value;
+  const confirmPass = document.getElementById('resetConfirmPassword').value;
+  if (!newPass || !confirmPass) { showToast('Enter and confirm the new password', 'error'); return; }
+  if (newPass !== confirmPass) { showToast('Passwords do not match', 'error'); return; }
+  if (newPass.length < 6) { showToast('Password must be at least 6 characters', 'error'); return; }
+
+  const username = yvpId.toLowerCase().replace(/\s+/g, '');
+  try {
+    const userQuery = await db.collection('users').where('username', '==', username).get();
+    if (userQuery.empty) {
+      showToast('No login account found. Create Login first.', 'error');
+      return;
+    }
+    await userQuery.docs[0].ref.update({
+      pendingPassword: newPass,
+      passwordResetAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    closeModal('resetPassModal');
+    showToast('Password reset saved. New password: ' + newPass + ' (share with employee)');
+  } catch (e) {
+    console.error(e);
+    showToast('Failed to reset password: ' + e.message, 'error');
+  }
+}
+
+
+// ── CHANGE OWN PASSWORD ───────────────────────────────
+function showChangePassword() {
+  document.getElementById('changeCurrentPass').value = '';
+  document.getElementById('changeNewPass').value = '';
+  document.getElementById('changeConfirmPass').value = '';
+  document.getElementById('changePassModal').classList.add('active');
+}
+
+async function saveChangePassword() {
+  const currentPass = document.getElementById('changeCurrentPass').value;
+  const newPass = document.getElementById('changeNewPass').value;
+  const confirmPass = document.getElementById('changeConfirmPass').value;
+
+  if (!currentPass || !newPass || !confirmPass) {
+    showToast('Please fill in all fields', 'error');
+    return;
+  }
+  if (newPass !== confirmPass) {
+    showToast('New passwords do not match', 'error');
+    return;
+  }
+  if (newPass.length < 6) {
+    showToast('Password must be at least 6 characters', 'error');
+    return;
+  }
+
+  try {
+    const user = auth.currentUser;
+    if (!user) {
+      showToast('Not logged in', 'error');
+      return;
+    }
+    // Re-authenticate then update
+    const cred = firebase.auth.EmailAuthProvider.credential(user.email, currentPass);
+    await user.reauthenticateWithCredential(cred);
+    await user.updatePassword(newPass);
+
+    // Also store in Firestore profile for reference
+    if (CU && CU.uid) {
+      await db.collection('users').doc(CU.uid).update({
+        passwordUpdatedAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+    }
+
+    closeModal('changePassModal');
+    showInfoModal('Success', 'Your password has been updated. Use the new password next time you log in.');
+  } catch (e) {
+    console.error(e);
+    if (e.code === 'auth/wrong-password' || e.code === 'auth/invalid-credential') {
+      showToast('Current password is incorrect', 'error');
+    } else if (e.code === 'auth/weak-password') {
+      showToast('Password is too weak', 'error');
+    } else {
+      showToast('Failed to update password: ' + e.message, 'error');
+    }
+  }
+}
+
+// ── RESET PASSWORD (Employee List) → default = YVP ID ─
+async function showResetPasswordForEmployee(yvpId, displayName) {
+  if (!yvpId) return;
+  const username = yvpId.toLowerCase().replace(/\s+/g, '');
+  const defaultPassword = yvpId;
+
+  // Check account exists
+  const userQuery = await db.collection('users').where('username', '==', username).get();
+  if (userQuery.empty) {
+    showToast('No login account found. Create Login first.', 'error');
+    return;
+  }
+
+  if (!confirm('Reset password for ' + (displayName || yvpId) + ' back to default (YVP ID)?')) return;
+
+  try {
+    // Store default password as pending (client cannot set other users Auth password)
+    await userQuery.docs[0].ref.update({
+      pendingPassword: defaultPassword,
+      passwordResetAt: firebase.firestore.FieldValue.serverTimestamp(),
+      passwordResetToDefault: true
+    });
+
+    // Show success popup
+    showInfoModal('Password Reset Successful', 
+      'Password for ' + (displayName || yvpId) + ' has been reset to the default password (their YVP ID: ' + yvpId + ').\n\nPlease inform the employee to use this password when logging in.');
+  } catch (e) {
+    console.error(e);
+    showToast('Failed to reset password', 'error');
+  }
+}
+
+// Override old saveResetPassword if modal still used - redirect to default reset
+async function saveResetPassword() {
+  const yvpId = document.getElementById('resetYvpId') ? document.getElementById('resetYvpId').value : '';
+  if (yvpId) {
+    closeModal('resetPassModal');
+    await showResetPasswordForEmployee(yvpId, document.getElementById('resetUserDisplay')?.value || yvpId);
+  }
+}
+
+
+// ── EDIT ATTENDANCE (Dashboard) ───────────────────────
+async function editAttendance(yvpId, empName, timeIn, timeOut, logId) {
+  const today = new Date().toISOString().slice(0, 10);
+  const docId = logId || (yvpId + '_' + today);
+
+  document.getElementById('editAttDocId').value = docId;
+  document.getElementById('editAttYvpId').value = yvpId;
+  document.getElementById('editAttDate').value = today;
+  document.getElementById('editAttName').value = empName || yvpId;
+  document.getElementById('editAttDateDisplay').value = today;
+  document.getElementById('editAttTimeIn').value = (timeIn && timeIn !== '—') ? timeIn : '';
+  document.getElementById('editAttTimeOut').value = (timeOut && timeOut !== '—') ? timeOut : '';
+  document.getElementById('editAttModal').classList.add('active');
+}
+
+function parseTimeForHours(timeStr, dateISO) {
+  if (!timeStr) return null;
+  const d = new Date(dateISO + ' ' + timeStr);
+  if (!isNaN(d.getTime())) return d;
+  // try common formats
+  const m = String(timeStr).match(/(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?/i);
+  if (!m) return null;
+  let h = parseInt(m[1], 10);
+  const min = parseInt(m[2], 10);
+  const sec = parseInt(m[3] || '0', 10);
+  const ap = (m[4] || '').toUpperCase();
+  if (ap === 'PM' && h < 12) h += 12;
+  if (ap === 'AM' && h === 12) h = 0;
+  const out = new Date(dateISO + 'T00:00:00');
+  out.setHours(h, min, sec, 0);
+  return out;
+}
+
+async function saveEditAttendance() {
+  const docId = document.getElementById('editAttDocId').value;
+  const yvpId = document.getElementById('editAttYvpId').value;
+  const date = document.getElementById('editAttDate').value;
+  const name = document.getElementById('editAttName').value;
+  const timeIn = document.getElementById('editAttTimeIn').value.trim();
+  const timeOut = document.getElementById('editAttTimeOut').value.trim();
+
+  if (!timeIn) {
+    showToast('Time In is required', 'error');
+    return;
+  }
+
+  let totalHours = null;
+  if (timeIn && timeOut) {
+    const d1 = parseTimeForHours(timeIn, date);
+    let d2 = parseTimeForHours(timeOut, date);
+    if (d1 && d2) {
+      let diff = (d2 - d1) / (1000 * 60 * 60);
+      if (diff < 0) diff += 24; // overnight shift
+      if (diff > 6) diff = 6;   // max 6 hours
+      if (diff < 0) diff = 0;
+      totalHours = diff.toFixed(2);
+    }
+  }
+
+  try {
+    const payload = {
+      yvpId: yvpId,
+      name: name,
+      date: date,
+      timeIn: timeIn,
+      timeOut: timeOut || null,
+      totalHours: totalHours,
+      manuallyEdited: true,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    };
+    // Load previous values for history
+    let prev = {};
+    try {
+      const prevDoc = await getDb().collection('attendance').doc(docId).get();
+      if (prevDoc.exists) prev = prevDoc.data();
+    } catch (e) {}
+
+    await getDb().collection('attendance').doc(docId).set(payload, { merge: true });
+
+    // History transactions
+    const nm = name || yvpId;
+    if ((prev.timeIn || '') !== timeIn) {
+      await logAttendanceHistory(yvpId, nm, 'Time-In was changed from "' + (prev.timeIn || '—') + '" to "' + timeIn + '"');
+    }
+    if ((prev.timeOut || '') !== (timeOut || '')) {
+      await logAttendanceHistory(yvpId, nm, 'Time-Out was changed from "' + (prev.timeOut || '—') + '" to "' + (timeOut || '—') + '"');
+    }
+    if (!prev.timeIn && timeIn) {
+      await logAttendanceHistory(yvpId, nm, 'Time-In set to "' + timeIn + '"');
+    }
+
+    closeModal('editAttModal');
+    showToast('Attendance updated — Reports & Payroll will reflect changes');
+    if (typeof loadHistory === 'function' && document.getElementById('sec-history')?.classList.contains('active')) loadHistory();
+    // UI refresh via realtime listener; also force local if needed
+    if (typeof renderDashboard === 'function') renderDashboard();
+    if (document.getElementById('sec-reports')?.classList.contains('active')) loadReports();
+    if (document.getElementById('sec-payroll')?.classList.contains('active')) loadPayroll();
+  } catch (e) {
+    console.error(e);
+    showToast('Failed to update attendance: ' + e.message, 'error');
+  }
+}
+
+async function loadUsers() {
+  const snap = await db.collection("users").get();
+  const users = snap.docs.map(d => ({id: d.id, ...d.data()}));
+  const tbody = document.getElementById("usersTbody");
+  if (!tbody) return;
+  tbody.innerHTML = users.length ? users.map(u => {
+    const role = u.role === 'manager' ? 'manager' : 'rank_file';
+    const roleLabel = role === 'manager' ? 'Manager' : 'Rank & File';
+    const badge = role === 'manager' ? 'badge-info' : 'badge-secondary';
+    const uname = (u.username || '').replace(/'/g, "\'");
+    return `<tr>
+      <td>${u.username || '—'}</td>
+      <td>${u.name || '—'}</td>
+      <td><span class="badge ${badge}">${roleLabel}</span></td>
+      <td>${u.yvpId || '—'}</td>
+      <td style="white-space:nowrap">
+        ${ (uname === 'admin' || u.username === 'admin' || (u.yvpId && String(u.yvpId).toUpperCase() === 'ADMIN') || (u.role === 'manager' && (u.name === 'Administrator' || uname === 'admin')))
+          ? '<span style="color:#999;font-size:12px">System Administrator (protected)</span>'
+          : `<button class="btn btn-primary btn-sm" onclick="editUserAccess('${u.id}','${uname}','${role}')">Edit Access</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteUserAccount('${u.id}','${uname}')">Delete</button>` }
+      </td>
+    </tr>`;
+  }).join('') : `<tr><td colspan="5" style="text-align:center;color:#999">No users found</td></tr>`;
+}
+
+function editUserAccess(uid, username, currentRole) {
+  if (String(username||'').toLowerCase() === 'admin') {
+    showToast('Cannot edit the System Administrator account', 'error');
+    return;
+  }
+  if (!uid) { showToast('User not found', 'error'); return; }
+  document.getElementById('editAccessUid').value = uid;
+  document.getElementById('editAccessUsername').value = username || '';
+  document.getElementById('editAccessRole').value = currentRole === 'manager' ? 'manager' : 'rank_file';
+  document.getElementById('editAccessModal').classList.add('active');
+}
+
+async function saveUserAccess() {
+  const uid = document.getElementById('editAccessUid').value;
+  const newRole = document.getElementById('editAccessRole').value;
+  const username = document.getElementById('editAccessUsername').value;
+
+  if (!uid) { showToast('User not found', 'error'); return; }
+  if (String(username||'').toLowerCase() === 'admin') {
+    showToast('Cannot edit the System Administrator account', 'error');
+    return;
+  }
+
+  try {
+    await db.collection('users').doc(uid).update({
+      role: newRole,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    closeModal('editAccessModal');
+    loadUsers();
+    showToast('Access updated to ' + (newRole === 'manager' ? 'Manager' : 'Rank & File'));
+
+    // If editing current user, refresh sidebar
+    if (CU && (CU.uid === uid || CU.username === username)) {
+      CU.role = newRole;
+      const roleEl = document.getElementById('sbRole');
+      if (roleEl) roleEl.textContent = newRole === 'manager' ? 'Manager' : 'Rank & File';
+      buildSidebar(newRole);
+    }
+  } catch (e) {
+    console.error(e);
+    showToast('Failed to update access: ' + e.message, 'error');
+  }
+}
+
+
+async function updateSidebarPosition() {
+  const posEl = document.getElementById('sbPosition');
+  const nameEl = document.getElementById('sbName');
+  if (!CU) return;
+
+  // Name
+  let displayName = CU.name || CU.username || '—';
+  try {
+    if (CU.yvpId) {
+      // Prefer live employee record for name + position
+      let emp = (typeof cachedEmployees !== 'undefined' ? cachedEmployees : []).find(e => e.yvpId === CU.yvpId);
+      if (!emp) {
+        const doc = await db.collection('employees').doc(CU.yvpId).get();
+        if (doc.exists) emp = doc.data();
+      }
+      if (emp) {
+        const full = [emp.firstName, emp.middleName, emp.lastName].filter(Boolean).join(' ')
+                  || [emp.lastName, emp.firstName, emp.middleName].filter(Boolean).join(' ');
+        if (full) displayName = full;
+        if (nameEl) nameEl.textContent = displayName;
+        if (posEl) posEl.textContent = emp.position || (CU.role === 'manager' ? 'Manager' : 'Rank & File');
+        return;
+      }
+    }
+  } catch (e) { console.error(e); }
+
+  if (nameEl) nameEl.textContent = displayName;
+  if (posEl) posEl.textContent = CU.role === 'manager' ? 'Manager' : 'Rank & File';
+}
+
+
+
+
+
+// ── LUNCH & BREAK ─────────────────────────────────────
+let lunchTimerInterval = null;
+let breakTimerInterval = null;
+
+function formatElapsed(ms) {
+  const totalSec = Math.floor(ms / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  return (h > 0 ? String(h).padStart(2,'0') + ':' : '') + String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0');
+}
+
+function stopLunchTimer() {
+  if (lunchTimerInterval) { clearInterval(lunchTimerInterval); lunchTimerInterval = null; }
+  const el = document.getElementById('lunchTimer');
+  if (el) el.style.display = 'none';
+}
+
+function stopBreakTimer() {
+  if (breakTimerInterval) { clearInterval(breakTimerInterval); breakTimerInterval = null; }
+  const el = document.getElementById('breakTimer');
+  if (el) el.style.display = 'none';
+}
+
+function startLocalTimer(startMs, elId, label) {
+  const el = document.getElementById(elId);
+  if (!el) return null;
+  el.style.display = 'block';
+  const tick = () => {
+    el.textContent = label + ' ' + formatElapsed(Date.now() - startMs);
+  };
+  tick();
+  return setInterval(tick, 1000);
+}
+
+async function getTodayAttendanceRef() {
+  const today = new Date().toISOString().slice(0,10);
+  const yvpId = CU.yvpId || CU.username;
+  const docId = yvpId + '_' + today;
+  return { ref: db.collection('attendance').doc(docId), docId, today, yvpId };
+}
+
+async function startLunch() {
+  try {
+    const { ref, today, yvpId } = await getTodayAttendanceRef();
+    const doc = await ref.get();
+    if (!doc.exists || !doc.data().timeIn || doc.data().timeOut) {
+      showToast('Clock in first before lunch', 'error');
+      return;
+    }
+    if (doc.data().lunchStart && !doc.data().lunchEnd) {
+      showToast('Lunch already in progress', 'error');
+      return;
+    }
+    if (doc.data().lunchEnd) {
+      showToast('Lunch can only be used once per shift', 'error');
+      return;
+    }
+    if (doc.data().breakStart && !doc.data().breakEnd) {
+      showToast('Finish break first', 'error');
+      return;
+    }
+
+    const timeNow = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
+    await ref.set({
+      lunchStart: timeNow,
+      lunchStartTs: firebase.firestore.FieldValue.serverTimestamp(),
+      lunchEnd: null,
+      lunchMinutes: null
+    }, { merge: true });
+
+    document.getElementById('btnLunch').style.display = 'none';
+    document.getElementById('btnDoneLunch').style.display = 'inline-block';
+    document.getElementById('btnBreak').style.display = 'none';
+    stopLunchTimer();
+    lunchTimerInterval = startLocalTimer(Date.now(), 'lunchTimer', '🍽️ Lunch:');
+
+    showInfoModal('YOU HAVE 1 HOUR, ENJOY YOUR LUNCH', 'Lunch timer started at ' + timeNow);
+  } catch (e) {
+    console.error(e);
+    showToast('Failed to start lunch: ' + e.message, 'error');
+  }
+}
+
+async function endLunch() {
+  try {
+    const { ref } = await getTodayAttendanceRef();
+    const doc = await ref.get();
+    if (!doc.exists || !doc.data().lunchStart || doc.data().lunchEnd) {
+      showToast('No active lunch', 'error');
+      return;
+    }
+
+    const data = doc.data();
+    const timeNow = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
+    let mins = 0;
+    if (data.lunchStartTs && data.lunchStartTs.toDate) {
+      mins = Math.round((Date.now() - data.lunchStartTs.toDate().getTime()) / 60000);
+    } else {
+      const m = calcMinutesBetween(data.lunchStart, timeNow, data.date);
+      mins = (m === '—') ? 0 : m;
+    }
+    if (mins < 0) mins = 0;
+
+    await ref.update({
+      lunchEnd: timeNow,
+      lunchEndTs: firebase.firestore.FieldValue.serverTimestamp(),
+      lunchMinutes: mins
+    });
+
+    stopLunchTimer();
+    document.getElementById('btnDoneLunch').style.display = 'none';
+    document.getElementById('btnLunch').style.display = 'inline-block';
+    document.getElementById('btnBreak').style.display = 'inline-block';
+
+    if (mins > 60) {
+      showInfoModal('YOU ARE OVER LUNCH', 'Lunch duration: ' + mins + ' minutes (limit 60).');
+    } else {
+      showInfoModal('Lunch Completed', 'Lunch duration: ' + mins + ' minutes.');
+    }
+  } catch (e) {
+    console.error(e);
+    showToast('Failed to end lunch: ' + e.message, 'error');
+  }
+}
+
+async function startBreak() {
+  try {
+    const { ref } = await getTodayAttendanceRef();
+    const doc = await ref.get();
+    if (!doc.exists || !doc.data().timeIn || doc.data().timeOut) {
+      showToast('Clock in first before break', 'error');
+      return;
+    }
+    if (doc.data().breakStart && !doc.data().breakEnd) {
+      showToast('Break already in progress', 'error');
+      return;
+    }
+    if (doc.data().breakEnd) {
+      showToast('Break can only be used once per shift', 'error');
+      return;
+    }
+    if (doc.data().lunchStart && !doc.data().lunchEnd) {
+      showToast('Finish lunch first', 'error');
+      return;
+    }
+
+    const timeNow = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
+    await ref.set({
+      breakStart: timeNow,
+      breakStartTs: firebase.firestore.FieldValue.serverTimestamp(),
+      breakEnd: null,
+      breakMinutes: null
+    }, { merge: true });
+
+    document.getElementById('btnBreak').style.display = 'none';
+    document.getElementById('btnDoneBreak').style.display = 'inline-block';
+    document.getElementById('btnLunch').style.display = 'none';
+    stopBreakTimer();
+    breakTimerInterval = startLocalTimer(Date.now(), 'breakTimer', '☕ Break:');
+
+    showInfoModal('YOU HAVE 15 minutes, ENJOY YOUR BREAK', 'Break timer started at ' + timeNow);
+  } catch (e) {
+    console.error(e);
+    showToast('Failed to start break: ' + e.message, 'error');
+  }
+}
+
+async function endBreak() {
+  try {
+    const { ref } = await getTodayAttendanceRef();
+    const doc = await ref.get();
+    if (!doc.exists || !doc.data().breakStart || doc.data().breakEnd) {
+      showToast('No active break', 'error');
+      return;
+    }
+
+    const data = doc.data();
+    const timeNow = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
+    let mins = 0;
+    if (data.breakStartTs && data.breakStartTs.toDate) {
+      mins = Math.round((Date.now() - data.breakStartTs.toDate().getTime()) / 60000);
+    } else {
+      const m = calcMinutesBetween(data.breakStart, timeNow, data.date);
+      mins = (m === '—') ? 0 : m;
+    }
+    if (mins < 0) mins = 0;
+
+    await ref.update({
+      breakEnd: timeNow,
+      breakEndTs: firebase.firestore.FieldValue.serverTimestamp(),
+      breakMinutes: mins
+    });
+
+    stopBreakTimer();
+    document.getElementById('btnDoneBreak').style.display = 'none';
+    document.getElementById('btnBreak').style.display = 'inline-block';
+    document.getElementById('btnLunch').style.display = 'inline-block';
+
+    if (mins > 15) {
+      showInfoModal('YOU ARE OVER BREAK', 'Break duration: ' + mins + ' minutes (limit 15).');
+    } else {
+      showInfoModal('Break Completed', 'Break duration: ' + mins + ' minutes.');
+    }
+  } catch (e) {
+    console.error(e);
+    showToast('Failed to end break: ' + e.message, 'error');
+  }
+}
+
+function updateLunchBreakButtons(myLog) {
+  const btnLunch = document.getElementById('btnLunch');
+  const btnDoneLunch = document.getElementById('btnDoneLunch');
+  const btnBreak = document.getElementById('btnBreak');
+  const btnDoneBreak = document.getElementById('btnDoneBreak');
+  if (!btnLunch || !btnDoneLunch || !btnBreak || !btnDoneBreak) return;
+
+  // Reset
+  btnLunch.style.display = 'none';
+  btnDoneLunch.style.display = 'none';
+  btnBreak.style.display = 'none';
+  btnDoneBreak.style.display = 'none';
+
+  // Only when clocked in
+  if (!myLog || !myLog.timeIn || myLog.timeOut) {
+    if (typeof stopLunchTimer === 'function') stopLunchTimer();
+    if (typeof stopBreakTimer === 'function') stopBreakTimer();
+    return;
+  }
+
+  const lunchActive = !!(myLog.lunchStart && !myLog.lunchEnd);
+  const lunchDone = !!myLog.lunchEnd;
+  const breakActive = !!(myLog.breakStart && !myLog.breakEnd);
+  const breakDone = !!myLog.breakEnd;
+
+  // LUNCH: show DONE while active; otherwise always show LUNCH button (even if already done)
+  if (lunchActive) {
+    btnDoneLunch.style.display = 'inline-block';
+    btnLunch.style.display = 'none';
+    if (typeof stopLunchTimer === 'function') stopLunchTimer();
+    let startMs = Date.now();
+    if (myLog.lunchStartTs && typeof myLog.lunchStartTs.toDate === 'function') {
+      startMs = myLog.lunchStartTs.toDate().getTime();
+    }
+    if (typeof startLocalTimer === 'function') {
+      lunchTimerInterval = startLocalTimer(startMs, 'lunchTimer', 'Lunch:');
+    }
+  } else {
+    btnLunch.style.display = 'inline-block';
+    if (typeof stopLunchTimer === 'function') stopLunchTimer();
+  }
+
+  // BREAK: show DONE while active; otherwise always show BREAK button (even if already done)
+  if (breakActive) {
+    btnDoneBreak.style.display = 'inline-block';
+    btnBreak.style.display = 'none';
+    if (typeof stopBreakTimer === 'function') stopBreakTimer();
+    let startMs = Date.now();
+    if (myLog.breakStartTs && typeof myLog.breakStartTs.toDate === 'function') {
+      startMs = myLog.breakStartTs.toDate().getTime();
+    }
+    if (typeof startLocalTimer === 'function') {
+      breakTimerInterval = startLocalTimer(startMs, 'breakTimer', 'Break:');
+    }
+  } else {
+    btnBreak.style.display = 'inline-block';
+    if (typeof stopBreakTimer === 'function') stopBreakTimer();
+  }
+}
+
+function forceShowLunchBreakIfClockedIn(myLog) {
+  try {
+    const btnLunch = document.getElementById('btnLunch');
+    const btnDoneLunch = document.getElementById('btnDoneLunch');
+    const btnBreak = document.getElementById('btnBreak');
+    const btnDoneBreak = document.getElementById('btnDoneBreak');
+    if (!btnLunch || !btnBreak) return;
+
+    if (!myLog || !myLog.timeIn || myLog.timeOut) {
+      btnLunch.style.display = 'none';
+      if (btnDoneLunch) btnDoneLunch.style.display = 'none';
+      btnBreak.style.display = 'none';
+      if (btnDoneBreak) btnDoneBreak.style.display = 'none';
+      return;
+    }
+
+    const lunchActive = !!(myLog.lunchStart && !myLog.lunchEnd);
+    const breakActive = !!(myLog.breakStart && !myLog.breakEnd);
+
+    if (lunchActive) {
+      btnLunch.style.display = 'none';
+      if (btnDoneLunch) btnDoneLunch.style.display = 'inline-block';
+    } else {
+      btnLunch.style.display = 'inline-block';
+      if (btnDoneLunch) btnDoneLunch.style.display = 'none';
+    }
+
+    if (breakActive) {
+      btnBreak.style.display = 'none';
+      if (btnDoneBreak) btnDoneBreak.style.display = 'inline-block';
+    } else {
+      btnBreak.style.display = 'inline-block';
+      if (btnDoneBreak) btnDoneBreak.style.display = 'none';
+    }
+
+    if (typeof updateLunchBreakButtons === 'function') {
+      updateLunchBreakButtons(myLog);
+    }
+  } catch (e) { console.error('forceShowLunchBreak', e); }
+}
+
+
+// Keep Lunch/Break visible while clocked in
+setInterval(function() {
+  try {
+    if (!CU || typeof liveAttendance === 'undefined') return;
+    var today = new Date().toISOString().slice(0,10);
+    var yvpId = CU.yvpId || CU.username;
+    var myLog = (liveAttendance || []).find(function(l){ return l.yvpId === yvpId && l.date === today; });
+    if (typeof forceShowLunchBreakIfClockedIn === 'function') {
+      forceShowLunchBreakIfClockedIn(myLog || null);
+    }
+  } catch (e) {}
+}, 1500);
+
+
+async function submitAddSchedule() {
+  const yvpId = (document.getElementById('addSchedYvpId')?.value || '').trim();
+  const fromDate = (document.getElementById('addSchedFrom')?.value || '').trim();
+  const toDate = (document.getElementById('addSchedTo')?.value || '').trim();
+  const shift = (document.getElementById('addSchedShift')?.value || '').trim();
+  if (!yvpId || !fromDate || !toDate || !shift) {
+    showToast('Please fill YVP ID, From Date, To Date, and Schedule', 'error');
+    return;
+  }
+  try {
+    const docId = yvpId + '_' + fromDate + '_' + toDate;
+    await db.collection('schedules').doc(docId).set({
+      yvpId, fromDate, toDate, shift,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+    document.getElementById('addSchedYvpId').value = '';
+    document.getElementById('addSchedFrom').value = '';
+    document.getElementById('addSchedTo').value = '';
+    document.getElementById('addSchedShift').value = '';
+    if (typeof loadSchedules === 'function') loadSchedules();
+    if (typeof preloadGlobalData === 'function') preloadGlobalData();
+    showToast('Schedule added');
+  } catch (e) {
+    console.error(e);
+    showToast('Failed to add schedule: ' + e.message, 'error');
+  }
+}
+
+
+// ── ATTENDANCE HISTORY ────────────────────────────────
+async function logAttendanceHistory(yvpId, name, transaction) {
+  try {
+    await getDb().collection('attendance_history').add({
+      yvpId: yvpId || '',
+      name: name || '',
+      transaction: transaction || '',
+      timestamp: firebase.firestore.FieldValue.serverTimestamp(),
+      timestampText: new Date().toLocaleString('en-US'),
+      byUser: (CU && (CU.username || CU.name)) || 'system'
+    });
+  } catch (e) {
+    console.error('History log failed', e);
+  }
+}
+
+async function loadHistory() {
+  const tbody = document.getElementById('historyTbody');
+  if (!tbody) return;
+  try {
+    const snap = await getDb().collection('attendance_history').orderBy('timestamp', 'desc').limit(500).get();
+    const rows = snap.docs.map(d => d.data());
+    tbody.innerHTML = rows.length ? rows.map(r => `
+      <tr>
+        <td>${r.yvpId || '—'}</td>
+        <td>${r.name || '—'}</td>
+        <td>${r.transaction || '—'}</td>
+        <td>${r.timestampText || (r.timestamp && r.timestamp.toDate ? r.timestamp.toDate().toLocaleString('en-US') : '—')}</td>
+      </tr>
+    `).join('') : `<tr><td colspan="4" style="text-align:center;color:#999">No history records</td></tr>`;
+  } catch (e) {
+    console.error(e);
+    // Fallback without orderBy if index missing
+    try {
+      const snap = await getDb().collection('attendance_history').limit(500).get();
+      const rows = snap.docs.map(d => d.data()).sort((a,b) => (b.timestampText||'').localeCompare(a.timestampText||''));
+      tbody.innerHTML = rows.length ? rows.map(r => `
+        <tr>
+          <td>${r.yvpId || '—'}</td>
+          <td>${r.name || '—'}</td>
+          <td>${r.transaction || '—'}</td>
+          <td>${r.timestampText || '—'}</td>
+        </tr>
+      `).join('') : `<tr><td colspan="4" style="text-align:center;color:#999">No history records</td></tr>`;
+    } catch (e2) {
+      tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;color:#c62828">Failed to load history</td></tr>`;
+    }
+  }
+}
+
+async function exportHistoryReport() {
+  try {
+    let rowsData = [];
+    try {
+      const snap = await getDb().collection('attendance_history').orderBy('timestamp', 'desc').limit(2000).get();
+      rowsData = snap.docs.map(d => d.data());
+    } catch (e) {
+      const snap = await getDb().collection('attendance_history').limit(2000).get();
+      rowsData = snap.docs.map(d => d.data());
+    }
+    const headers = ['YVP ID', 'Name', 'Transaction', 'Date & Time', 'By User'];
+    const rows = rowsData.map(r => [
+      r.yvpId || '',
+      r.name || '',
+      r.transaction || '',
+      r.timestampText || '',
+      r.byUser || ''
+    ]);
+    const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'History');
+    XLSX.writeFile(wb, 'YVP_Attendance_History_' + new Date().toISOString().slice(0,10) + '.xlsx');
+    showToast('History report downloaded');
+  } catch (e) {
+    console.error(e);
+    showToast('Failed to export history', 'error');
+  }
+}
+
+function editAttendanceFromReport(logId, yvpId, name, date, timeIn, timeOut) {
+  document.getElementById('editAttDocId').value = logId;
+  document.getElementById('editAttYvpId').value = yvpId || '';
+  document.getElementById('editAttDate').value = date || '';
+  document.getElementById('editAttName').value = name || yvpId || '';
+  document.getElementById('editAttDateDisplay').value = date || '';
+  document.getElementById('editAttTimeIn').value = (timeIn && timeIn !== '—') ? timeIn : '';
+  document.getElementById('editAttTimeOut').value = (timeOut && timeOut !== '—') ? timeOut : '';
+  document.getElementById('editAttModal').classList.add('active');
+}
+
+
+// ── DEPARTMENTS & INVOICE ─────────────────────────────
+const DEFAULT_DEPARTMENTS = ['Twinacre Ventures LLC', 'Vandelay Real Estate'];
+
+async function loadDepartmentList() {
+  let depts = DEFAULT_DEPARTMENTS.slice();
+  try {
+    const snap = await getDb().collection('departments').get();
+    snap.docs.forEach(d => {
+      const n = d.data().name;
+      if (n && depts.indexOf(n) === -1) depts.push(n);
+    });
+  } catch (e) {}
+  // also from employees
+  (cachedEmployees || []).forEach(e => {
+    if (e.department && depts.indexOf(e.department) === -1) depts.push(e.department);
+  });
+  return depts;
+}
+
+async function loadDepartmentsIntoInvoice() {
+  const depts = await loadDepartmentList();
+  const sel = document.getElementById('invDepartment');
+  const fDept = document.getElementById('fDepartment');
+  if (sel) {
+    const cur = sel.value;
+    sel.innerHTML = depts.map(d => `<option value="${d}">${d}</option>`).join('');
+    if (cur && depts.indexOf(cur) >= 0) sel.value = cur;
+  }
+  if (fDept) {
+    const cur = fDept.value;
+    fDept.innerHTML = '<option value="">— Select —</option>' + depts.map(d => `<option value="${d}">${d}</option>`).join('');
+    if (cur) fDept.value = cur;
+  }
+}
+
+function showAddDepartment() {
+  document.getElementById('newDeptName').value = '';
+  document.getElementById('addDeptModal').classList.add('active');
+}
+
+async function saveNewDepartment() {
+  const name = (document.getElementById('newDeptName').value || '').trim();
+  if (!name) { showToast('Enter department name', 'error'); return; }
+  try {
+    await getDb().collection('departments').doc(name.replace(/\//g,'_')).set({
+      name,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    closeModal('addDeptModal');
+    await loadDepartmentsIntoInvoice();
+    const sel = document.getElementById('invDepartment');
+    if (sel) sel.value = name;
+    showToast('Department added');
+    refreshInvoiceAgents();
+  } catch (e) {
+    showToast('Failed to add department: ' + e.message, 'error');
+  }
+}
+
+async function generateInvoiceNumber() {
+  try {
+    const ref = getDb().collection('meta').doc('invoiceCounter');
+    const num = await getDb().runTransaction(async (tx) => {
+      const doc = await tx.get(ref);
+      let next = 1;
+      if (doc.exists && doc.data().last) next = (parseInt(doc.data().last, 10) || 0) + 1;
+      tx.set(ref, { last: next }, { merge: true });
+      return next;
+    });
+    const invNo = 'YVP-INV' + String(num).padStart(4, '0');
+    document.getElementById('invNumber').value = invNo;
+    if (typeof saveInvoiceToTracker === 'function') { saveInvoiceToTracker(); }
+    showToast('Invoice number: ' + invNo);
+  } catch (e) {
+    console.error(e);
+    // fallback local sequential in localStorage
+    let n = parseInt(localStorage.getItem('yvp_inv_counter') || '0', 10) + 1;
+    localStorage.setItem('yvp_inv_counter', String(n));
+    const invNo = 'YVP-INV' + String(n).padStart(4, '0');
+    document.getElementById('invNumber').value = invNo;
+    if (typeof saveInvoiceToTracker === 'function') { saveInvoiceToTracker(); }
+    showToast('Invoice number: ' + invNo + ' (local)');
+  }
+}
+
+async function refreshInvoiceAgents() {
+  const dept = (document.getElementById('invDepartment') || {}).value || '';
+  const fromDate = (document.getElementById('invFrom') || {}).value || '';
+  const toDate = (document.getElementById('invTo') || {}).value || '';
+  const label = document.getElementById('invDeptLabel');
+  if (label) label.textContent = dept;
+  const tbody = document.getElementById('invAgentsTbody');
+  if (!tbody) return;
+
+  const emps = (cachedEmployees || []).filter(e => (e.department || '') === dept);
+  // hours from attendance
+  const aSnap = await getDb().collection('attendance').get();
+  const hoursMap = {};
+  aSnap.docs.forEach(d => {
+    const l = d.data();
+    if (!l.timeIn || !l.timeOut) return;
+    if (fromDate && l.date < fromDate) return;
+    if (toDate && l.date > toDate) return;
+    let hrs = parseFloat(l.totalHours) || 0;
+    if (hrs > 6) hrs = 6;
+    hoursMap[l.yvpId] = (hoursMap[l.yvpId] || 0) + hrs;
+  });
+
+  let totalDue = 0;
+  if (!emps.length) {
+    tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;color:#999">No employees in this department</td></tr>`;
+  } else {
+    tbody.innerHTML = emps.map(e => {
+      const name = [e.firstName, e.middleName, e.lastName].filter(Boolean).join(' ') || e.yvpId;
+      const hrs = Math.round((hoursMap[e.yvpId] || 0) * 100) / 100;
+      const rate = parseFloat(e.hourlyRate) || 0;
+      const total = hrs * rate;
+      totalDue += total;
+      return `<tr>
+        <td><input type="text" class="inv-edit-name" value="${name.replace(/"/g,'&quot;')}" style="width:100%;border:1px dashed #ccc;padding:4px 6px"/></td>
+        <td><input type="number" class="inv-edit-hrs" value="${hrs}" step="0.01" style="width:90px;border:1px dashed #ccc;padding:4px 6px" oninput="recalcInvoiceRow(this)"/></td>
+        <td><input type="number" class="inv-edit-rate" value="${Math.round(rate)}" step="1" style="width:90px;border:1px dashed #ccc;padding:4px 6px" oninput="recalcInvoiceRow(this)"/></td>
+        <td><input type="text" class="inv-edit-total" value="$${total.toFixed(2)}" style="width:100px;border:1px dashed #ccc;padding:4px 6px"/></td>
+      </tr>`;
+    }).join('');
+  }
+  const dueEl = document.getElementById('invTotalDue');
+  if (dueEl) {
+    if (dueEl.tagName === 'INPUT') dueEl.value = '$' + totalDue.toFixed(2);
+    else dueEl.textContent = '$' + totalDue.toFixed(2);
+  }
+  window._invoiceTotalDue = totalDue;
+  window._invoiceRows = emps.map(e => {
+    const name = [e.firstName, e.middleName, e.lastName].filter(Boolean).join(' ') || e.yvpId;
+    const hrs = Math.round((hoursMap[e.yvpId] || 0) * 100) / 100;
+    const rate = parseFloat(e.hourlyRate) || 0;
+    return { name, hrs, rate, total: hrs * rate };
+  });
+}
+
+function uploadInvoiceQr(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    const prev = document.getElementById('invQrPreview');
+    prev.innerHTML = '<img src="' + e.target.result + '" alt="QR" style="width:120px;height:160px;object-fit:cover;border:1px solid #ccc;border-radius:4px"/>';
+    window._invoiceQrDataUrl = e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+async function exportInvoiceExcel() {
+  if (typeof saveInvoiceToTracker === 'function') { try { await saveInvoiceToTracker(); } catch(e){} }
+
+  const dept = (document.getElementById('invDepartment') || {}).value || '';
+  const invNo = (document.getElementById('invNumber') || {}).value || '';
+  const client = (document.getElementById('invClientName') || {}).value || '';
+  const email = (document.getElementById('invClientEmail') || {}).value || '';
+  const fromDate = (document.getElementById('invFrom') || {}).value || '';
+  const toDate = (document.getElementById('invTo') || {}).value || '';
+  let rows = [];
+  document.querySelectorAll('#invAgentsTbody tr').forEach(tr => {
+    const name = tr.querySelector('.inv-edit-name')?.value || tr.cells[0]?.innerText || '';
+    const hrs = parseFloat(tr.querySelector('.inv-edit-hrs')?.value) || 0;
+    const rate = parseFloat(tr.querySelector('.inv-edit-rate')?.value) || 0;
+    const totalStr = (tr.querySelector('.inv-edit-total')?.value || '').replace(/[^0-9.\-]/g,'');
+    const total = parseFloat(totalStr) || (hrs * rate);
+    if (name) rows.push({ name, hrs, rate, total });
+  });
+  if (!rows.length) rows = window._invoiceRows || [];
+  const dueRaw = (document.getElementById('invTotalDue')?.value || document.getElementById('invTotalDue')?.textContent || '').replace(/[^0-9.\-]/g,'');
+  const totalDue = parseFloat(dueRaw) || window._invoiceTotalDue || 0;
+
+  const aoa = [
+    ['YVP Administrative Support Services'],
+    ['Phone: ' + ((document.getElementById('invPhone')||{}).value || ''), 'Email: ' + ((document.getElementById('invEmailFrom')||{}).value || '')],
+    [],
+    [(document.getElementById('invTitle')||{}).value || 'INVOICE'],
+    [],
+    ['NAME', client],
+    ['EMAIL', email],
+    ['Invoice No.', invNo],
+    ['Coverage From', fromDate, 'Coverage To', toDate],
+    ['Department', dept],
+    [],
+    ['Name', 'Hours Worked', 'Hourly Rate', 'Total'],
+    ...rows.map(r => [r.name, r.hrs, '$' + Math.round(r.rate), '$' + r.total.toFixed(2)]),
+    [],
+    ['TOTAL DUE', '', '', '$' + totalDue.toFixed(2)],
+    [],
+    ['Payment Instructions', (document.getElementById('invPayInstr')||{}).value || ''],
+    ['Bank Details', (document.getElementById('invBank')||{}).value || '']
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Invoice');
+  XLSX.writeFile(wb, (invNo || 'YVP_Invoice') + '.xlsx');
+  showToast('Invoice Excel downloaded');
+}
+
+
+
+
+function removeInvoiceQr() {
+  const prev = document.getElementById('invQrPreview');
+  if (prev) prev.innerHTML = '<span style="color:#999;font-size:13px">No QR code uploaded</span>';
+  window._invoiceQrDataUrl = null;
+  const f = document.getElementById('invQrFile');
+  if (f) f.value = '';
+  showToast('QR code removed');
+}
+
+function recalcInvoiceRow(el) {
+  try {
+    const tr = el.closest('tr');
+    if (!tr) return;
+    const hrs = parseFloat(tr.querySelector('.inv-edit-hrs')?.value) || 0;
+    const rate = parseFloat(tr.querySelector('.inv-edit-rate')?.value) || 0;
+    const total = hrs * rate;
+    const totEl = tr.querySelector('.inv-edit-total');
+    if (totEl) totEl.value = '$' + total.toFixed(2);
+    // sum all totals
+    let sum = 0;
+    document.querySelectorAll('#invAgentsTbody tr').forEach(row => {
+      const t = (row.querySelector('.inv-edit-total')?.value || '').replace(/[^0-9.\-]/g,'');
+      sum += parseFloat(t) || 0;
+    });
+    const dueEl = document.getElementById('invTotalDue');
+    if (dueEl) {
+      if (dueEl.tagName === 'INPUT') dueEl.value = '$' + sum.toFixed(2);
+      else dueEl.textContent = '$' + sum.toFixed(2);
+    }
+    window._invoiceTotalDue = sum;
+  } catch (e) { console.error(e); }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+function applyInvoiceDefaultsByDepartment(dept) {
+  const d = String(dept || '').trim().toLowerCase();
+  const nameEl = document.getElementById('invClientName');
+  const emailEl = document.getElementById('invClientEmail');
+  if (!nameEl || !emailEl) return;
+  if (d.indexOf('vandelay') >= 0) {
+    nameEl.value = 'ROY GOTTESDIENER';
+    emailEl.value = 'roygo88@gmail.com';
+  } else if (d.indexOf('twinacre') >= 0) {
+    nameEl.value = 'HILARIO CRUZ';
+    emailEl.value = 'twinacreventuresllc@gmail.com';
+  }
+  const pay = document.getElementById('invPayInstr');
+  const bank = document.getElementById('invBank');
+  if (pay && !String(pay.value || '').trim()) {
+    pay.value = 'Please send payment via my WISE Account\nWise: https://wise.com/pay/r/i3fIn-TuX7dU9io';
+  }
+  if (bank && !String(bank.value || '').trim()) {
+    bank.value = 'Account Name: JAN ADRIAN ALOBA BAUTISTA\nAccount Number: 2003095900\nBank Code: 01828-001-6\nBank Name: Wise Pilipinas Inc.';
+  }
+}
+
+
+
+
+function escapeHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+
+
+
+
+
+
+
+
+async function saveInvoiceToTracker() {
+  const invNo = (document.getElementById('invNumber') || {}).value || '';
+  if (!invNo) return null;
+  const billTo = (document.getElementById('invClientName') || {}).value || '';
+  const dept = (document.getElementById('invDepartment') || {}).value || '';
+  const totalDueEl = document.getElementById('invTotalDue');
+  const amount = totalDueEl ? (totalDueEl.value || totalDueEl.textContent || '$0.00') : '$0.00';
+  const now = new Date();
+  const dateGenerated = now.toLocaleString('en-US');
+  const payload = {
+    invoiceNo: invNo,
+    billTo: billTo,
+    amount: amount,
+    department: dept,
+    dateGenerated: dateGenerated,
+    status: 'Pending Payment',
+    referenceNo: '',
+    createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+    byUser: (CU && (CU.username || CU.name)) || 'system'
+  };
+  let isNew = true;
+  try {
+    const existing = await getDb().collection('invoices').doc(invNo).get();
+    isNew = !existing.exists;
+    await getDb().collection('invoices').doc(invNo).set(payload, { merge: true });
+  } catch (e) {
+    console.error('saveInvoiceToTracker', e);
+    try {
+      const list = JSON.parse(localStorage.getItem('yvp_invoices') || '[]');
+      const idx = list.findIndex(x => x.invoiceNo === invNo);
+      isNew = idx < 0;
+      if (idx >= 0) list[idx] = payload; else list.unshift(payload);
+      localStorage.setItem('yvp_invoices', JSON.stringify(list));
+    } catch (e2) {}
+  }
+
+  if (typeof logAttendanceHistory === 'function') {
+    const action = isNew
+      ? ('Invoice generated: ' + invNo + ' | Bill To: ' + (billTo || '—') + ' | Amount: ' + amount + ' | Department: ' + (dept || '—'))
+      : ('Invoice updated in Tracker: ' + invNo + ' | Bill To: ' + (billTo || '—') + ' | Amount: ' + amount + ' | Department: ' + (dept || '—'));
+    await logAttendanceHistory(invNo, billTo || invNo, action);
+  }
+  return payload;
+}
+
+
+
+
+async function deleteInvoiceTracker(invoiceNo, billTo) {
+  if (!invoiceNo) return;
+  if (!confirm('Delete invoice ' + invoiceNo + '?')) return;
+  try {
+    await getDb().collection('invoices').doc(invoiceNo).delete();
+  } catch (e) {
+    console.error(e);
+  }
+  // local fallback cleanup
+  try {
+    const list = JSON.parse(localStorage.getItem('yvp_invoices') || '[]');
+    localStorage.setItem('yvp_invoices', JSON.stringify(list.filter(x => x.invoiceNo !== invoiceNo)));
+  } catch (e2) {}
+
+  if (typeof logAttendanceHistory === 'function') {
+    await logAttendanceHistory(
+      invoiceNo,
+      billTo || invoiceNo,
+      'Invoice deleted from Tracker: ' + invoiceNo + (billTo ? ' (Bill To: ' + billTo + ')' : '')
+    );
+  }
+  showToast('Invoice deleted');
+  loadInvoiceTracker();
+}
+
+
+
+
+
+
+
+async function exportInvoiceTracker() {
+  let rows = [];
+  try {
+    const snap = await getDb().collection('invoices').limit(2000).get();
+    rows = snap.docs.map(d => d.data());
+  } catch (e) {
+    try { rows = JSON.parse(localStorage.getItem('yvp_invoices') || '[]'); } catch (e2) { rows = []; }
+  }
+  const headers = ['Invoice No', 'Bill To (Client Name)', 'Amount', 'Department', 'Date Generated', 'Status', 'Reference/Receipt #'];
+  const data = rows.map(r => [r.invoiceNo||'', r.billTo||'', r.amount||'', r.department||'', r.dateGenerated||'', r.status||'Pending Payment', r.referenceNo||'']);
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...data]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Invoice Tracker');
+  XLSX.writeFile(wb, 'YVP_Invoice_Tracker_' + new Date().toISOString().slice(0,10) + '.xlsx');
+  showToast('Invoice Tracker downloaded');
+}
+
+
+async function loadInvoiceTracker() {
+  const tbody = document.getElementById('invoiceTrackerTbody');
+  if (!tbody) return;
+  let rows = [];
+  try {
+    const snap = await getDb().collection('invoices').orderBy('createdAt', 'desc').limit(500).get();
+    rows = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  } catch (e) {
+    try {
+      const snap = await getDb().collection('invoices').limit(500).get();
+      rows = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      rows.sort((a,b) => String(b.dateGenerated||'').localeCompare(String(a.dateGenerated||'')));
+    } catch (e2) {
+      try {
+        rows = JSON.parse(localStorage.getItem('yvp_invoices') || '[]');
+        rows = rows.map(r => ({ id: r.invoiceNo, ...r }));
+      } catch (e3) { rows = []; }
+    }
+  }
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#999">No invoices generated yet. Click GENERATE INVOICE on the Invoice page.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map(r => {
+    const invNo = r.invoiceNo || r.id || '';
+    const safeInv = String(invNo).replace(/'/g, "\\'");
+    const safeBill = String(r.billTo || '').replace(/'/g, "\\'");
+    const status = r.status || 'Pending Payment';
+    const refNo = r.referenceNo || '';
+    const safeRef = String(refNo).replace(/"/g, '&quot;');
+    const optPending = status === 'Pending Payment' ? 'selected' : '';
+    const optReceived = status === 'Payment Received' ? 'selected' : '';
+    return '<tr data-invoice="' + safeInv + '">'
+      + '<td>' + (invNo || '—') + '</td>'
+      + '<td>' + (r.billTo || '—') + '</td>'
+      + '<td>' + (r.amount || '—') + '</td>'
+      + '<td>' + (r.department || '—') + '</td>'
+      + '<td>' + (r.dateGenerated || '—') + '</td>'
+      + '<td><select class="inv-track-status" style="padding:4px 6px;border-radius:6px;border:1px solid #ccc">'
+      + '<option value="Pending Payment" ' + optPending + '>Pending Payment</option>'
+      + '<option value="Payment Received" ' + optReceived + '>Payment Received</option>'
+      + '</select></td>'
+      + '<td><input type="text" class="inv-track-ref" value="' + safeRef + '" placeholder="Reference/Receipt #" style="width:140px;padding:4px 6px;border:1px solid #ccc;border-radius:6px"/></td>'
+      + '<td style="white-space:nowrap">'
+      + '<button class="btn btn-primary btn-sm" type="button" onclick="saveInvoiceTrackerRow(\'' + safeInv + '\', this)">Save</button> '
+      + '<button class="btn btn-danger btn-sm" type="button" onclick="deleteInvoiceTracker(\'' + safeInv + '\',\'' + safeBill + '\')">Delete</button>'
+      + '</td>'
+      + '</tr>';
+  }).join('');
+}
+
+async function saveInvoiceTrackerRow(invoiceNo, btn) {
+  if (!invoiceNo) return;
+  const tr = btn ? btn.closest('tr') : document.querySelector('tr[data-invoice="' + invoiceNo.replace(/'/g, "\\'") + '"]');
+  if (!tr) { showToast('Row not found', 'error'); return; }
+  const status = (tr.querySelector('.inv-track-status') || {}).value || 'Pending Payment';
+  const referenceNo = (tr.querySelector('.inv-track-ref') || {}).value || '';
+  try {
+    await getDb().collection('invoices').doc(invoiceNo).set({
+      status: status,
+      referenceNo: referenceNo,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+
+    try {
+      const list = JSON.parse(localStorage.getItem('yvp_invoices') || '[]');
+      const idx = list.findIndex(x => x.invoiceNo === invoiceNo);
+      if (idx >= 0) {
+        list[idx].status = status;
+        list[idx].referenceNo = referenceNo;
+        localStorage.setItem('yvp_invoices', JSON.stringify(list));
+      }
+    } catch (e2) {}
+
+    if (typeof logAttendanceHistory === 'function') {
+      await logAttendanceHistory(
+        invoiceNo,
+        invoiceNo,
+        'Invoice Tracker saved: Status="' + status + '", Reference/Receipt #="' + referenceNo + '" for ' + invoiceNo
+      );
+    }
+    showToast('Invoice ' + invoiceNo + ' saved');
+  } catch (e) {
+    console.error(e);
+    showToast('Failed to save: ' + e.message, 'error');
+  }
+}
+
+
+function isSystemAdminUser(u) {
+  if (!u) return false;
+  const uname = String(u.username || u || '').toLowerCase();
+  const yvp = String(u.yvpId || '').toUpperCase();
+  const name = String(u.name || '').toLowerCase();
+  return uname === 'admin' || yvp === 'ADMIN' || name === 'administrator';
+}
+
+
+
+
+
+
+function closeEmpInfo() {
+  closeModal('empInfoModal');
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+function exportInvoicePdf() {
+  try {
+    if (typeof escapeHtml !== 'function') {
+      window.escapeHtml = function(s) {
+        return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+      };
+    }
+    const g = function(id){ return document.getElementById(id); };
+    const phone = (g('invPhone') || {}).value || '';
+    const emailFrom = (g('invEmailFrom') || {}).value || '';
+    const title = (g('invTitle') || {}).value || 'INVOICE';
+    const clientName = (g('invClientName') || {}).value || '';
+    const clientEmail = (g('invClientEmail') || {}).value || '';
+    const invNo = (g('invNumber') || {}).value || '';
+    const fromDate = (g('invFrom') || {}).value || '';
+    const toDate = (g('invTo') || {}).value || '';
+    const dept = (g('invDepartment') || {}).value || '';
+    const payInstr = (g('invPayInstr') || {}).value || '';
+    const bank = (g('invBank') || {}).value || '';
+    const totalDueEl = g('invTotalDue');
+    const totalDue = totalDueEl ? (totalDueEl.value || totalDueEl.textContent || '$0.00') : '$0.00';
+    if (typeof saveInvoiceToTracker === 'function') {
+      try { saveInvoiceToTracker(); } catch (e0) {}
+    }
+    var agentRows = '';
+    document.querySelectorAll('#invAgentsTbody tr').forEach(function(tr) {
+      if (!tr.querySelector('.inv-edit-name')) return;
+      var name = tr.querySelector('.inv-edit-name').value || '';
+      var hrs = (tr.querySelector('.inv-edit-hrs') || {}).value || '';
+      var rate = (tr.querySelector('.inv-edit-rate') || {}).value || '';
+      var total = (tr.querySelector('.inv-edit-total') || {}).value || '';
+      agentRows += '<tr><td>' + escapeHtml(name) + '</td><td>' + escapeHtml(hrs) + '</td><td>$' + escapeHtml(String(rate).replace(/^\$/,'')) + '</td><td>' + escapeHtml(total) + '</td></tr>';
+    });
+    if (!agentRows) agentRows = '<tr><td colspan="4" style="text-align:center;color:#999">No agents</td></tr>';
+    var qr = window._invoiceQrDataUrl
+      ? '<img src="' + window._invoiceQrDataUrl + '" style="width:120px;height:160px;object-fit:cover;border:1px solid #ccc"/>'
+      : '<span style="color:#999">No QR uploaded</span>';
+    var htmlDoc = '<!DOCTYPE html><html><head><meta charset="UTF-8"/><title>' + escapeHtml(invNo || 'Invoice') + '</title><style>'
+      + 'body{font-family:Segoe UI,Arial,sans-serif;color:#222;padding:28px;max-width:800px;margin:0 auto}'
+      + 'h1{color:#1a237e;text-align:center;margin:0 0 6px;font-size:20px}'
+      + '.sub{text-align:center;color:#555;font-size:12px;margin-bottom:12px}'
+      + 'hr{border:none;border-top:2px solid #1a237e;margin:12px 0}'
+      + '.title{text-align:center;font-size:26px;font-weight:800;color:#1a237e;letter-spacing:2px;margin:10px 0 16px}'
+      + '.label{font-weight:700;color:#1a237e;margin-top:12px}'
+      + '.billto{font-weight:800;color:#1a237e;margin:10px 0 4px}'
+      + 'table{width:100%;border-collapse:collapse;margin-top:10px}'
+      + 'th,td{border:1px solid #ccc;padding:8px;text-align:left;font-size:13px}'
+      + 'th{background:#1a237e;color:#fff}'
+      + '.total{text-align:right;font-weight:800;color:#1a237e}'
+      + '.pre{white-space:pre-wrap;font-size:13px;margin-top:4px}'
+      + '.scan{text-align:center;margin-top:18px}'
+      + '</style></head><body>'
+      + '<h1>YVP Administrative Support Services</h1>'
+      + '<div class="sub">Phone: ' + escapeHtml(phone) + ' | Email: ' + escapeHtml(emailFrom) + '</div><hr/>'
+      + '<div class="title">' + escapeHtml(title) + '</div>'
+      + '<div class="billto">BILL TO:</div>'
+      + '<div><b>NAME:</b> ' + escapeHtml(clientName) + '</div>'
+      + '<div><b>EMAIL:</b> ' + escapeHtml(clientEmail) + '</div>'
+      + '<div class="label">INVOICE DETAILS</div>'
+      + '<div><b>Invoice No:</b> ' + escapeHtml(invNo) + '</div>'
+      + '<div><b>Coverage From:</b> ' + escapeHtml(fromDate) + ' &nbsp; <b>To:</b> ' + escapeHtml(toDate) + '</div>'
+      + '<div class="label">Real Estate VAs — ' + escapeHtml(dept) + '</div>'
+      + '<table><thead><tr><th>Name</th><th>Hours Worked</th><th>Hourly Rate</th><th>Total</th></tr></thead><tbody>' + agentRows
+      + '</tbody><tfoot><tr><td colspan="3" class="total">TOTAL DUE</td><td class="total">' + escapeHtml(totalDue) + '</td></tr></tfoot></table>'
+      + '<div class="label">Payment Instructions</div><div class="pre">' + escapeHtml(payInstr) + '</div>'
+      + '<div class="label">Bank Details</div><div class="pre">' + escapeHtml(bank) + '</div>'
+      + '<div class="scan"><div class="label">SCAN TO PAY</div>' + qr + '</div></body></html>';
+    var w = window.open('', '_blank');
+    if (!w) { showToast('Please allow pop-ups to export PDF', 'error'); return; }
+    w.document.open(); w.document.write(htmlDoc); w.document.close();
+    setTimeout(function(){ w.focus(); w.print(); }, 400);
+    showToast('Use Print dialog → Save as PDF');
+  } catch (e) {
+    console.error(e);
+    showToast('PDF export failed: ' + e.message, 'error');
+  }
+}
+
+
+async function loadEmployees() {
+  const _db = (typeof getDb === 'function') ? getDb() : db;
+  const snap = await _db.collection('employees').orderBy('yvpId').get();
+  let emps = snap.docs.map(function(d){ return Object.assign({ id: d.id }, d.data()); });
+  cachedEmployees = emps;
+  const searchEl = document.getElementById('empSearch');
+  const q = (searchEl && searchEl.value || '').toLowerCase();
+  if (q) {
+    emps = emps.filter(function(e) {
+      return (e.yvpId||'').toLowerCase().indexOf(q) >= 0
+        || (e.lastName||'').toLowerCase().indexOf(q) >= 0
+        || (e.firstName||'').toLowerCase().indexOf(q) >= 0
+        || (e.middleName||'').toLowerCase().indexOf(q) >= 0
+        || (e.position||'').toLowerCase().indexOf(q) >= 0
+        || (e.department||'').toLowerCase().indexOf(q) >= 0
+        || (e.email||'').toLowerCase().indexOf(q) >= 0;
+    });
+  }
+  const tbody = document.getElementById('empTbody');
+  if (!tbody) return;
+  if (!emps.length) {
+    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#999">No employees found</td></tr>';
+    return;
+  }
+  tbody.innerHTML = emps.map(function(e) {
+    const fullNameDisplay = [e.firstName, e.middleName, e.lastName].filter(Boolean).join(' ') || '—';
+    const safeYvp = String(e.yvpId || '').replace(/'/g, "\\'");
+    const safeName = fullNameDisplay.replace(/'/g, "\\'");
+    const rate = (e.hourlyRate != null && e.hourlyRate !== '') ? ('$' + parseFloat(e.hourlyRate).toFixed(2)) : '—';
+    var html = '';
+    // Compact list row
+    html += '<tr class="emp-acc-row" id="emp-row-' + safeYvp + '">';
+    html += '<td>' + (e.yvpId || '') + '</td>';
+    html += '<td><b>' + fullNameDisplay + '</b></td>';
+    html += '<td>' + (e.position || '—') + '</td>';
+    html += '<td style="min-width:210px"><div style="display:flex;flex-wrap:wrap;gap:4px">';
+    html += '<button class="btn btn-primary btn-sm" onclick="editEmp(\'' + safeYvp + '\')">Edit</button>';
+    html += '<button class="btn btn-success btn-sm" onclick="createLoginForEmployee(\'' + safeYvp + '\')">Create Login</button>';
+    html += '<button class="btn btn-secondary btn-sm emp-acc-toggle" id="emp-btn-' + safeYvp + '" onclick="toggleEmployeeAccordion(\'' + safeYvp + '\')">Employee Info ▾</button>';
+    html += '</div></td></tr>';
+    // Accordion details (hidden by default)
+    html += '<tr class="emp-acc-panel" id="emp-panel-' + safeYvp + '"><td colspan="4">';
+    html += '<div class="emp-acc-grid">';
+    html += '<div><b>YVP ID</b><span>' + (e.yvpId || '—') + '</span></div>';
+    html += '<div><b>Full Name</b><span>' + fullNameDisplay + '</span></div>';
+    html += '<div><b>Last Name</b><span>' + (e.lastName || '—') + '</span></div>';
+    html += '<div><b>First Name</b><span>' + (e.firstName || '—') + '</span></div>';
+    html += '<div><b>Middle Name</b><span>' + (e.middleName || '—') + '</span></div>';
+    html += '<div><b>Position</b><span>' + (e.position || '—') + '</span></div>';
+    html += '<div><b>Department</b><span>' + (e.department || '—') + '</span></div>';
+    html += '<div><b>Hourly Rate</b><span>' + rate + '</span></div>';
+    html += '<div><b>Birthday</b><span>' + (e.birthday || '—') + '</span></div>';
+    html += '<div><b>Email</b><span>' + (e.email || '—') + '</span></div>';
+    html += '<div><b>Contact</b><span>' + (e.contact || '—') + '</span></div>';
+    html += '<div style="grid-column:1/-1"><b>Address</b><span>' + (e.address || '—') + '</span></div>';
+    html += '</div>';
+    html += '<div class="emp-acc-actions">';
+    html += '<button class="btn btn-warning btn-sm" onclick="showResetPasswordForEmployee(\'' + safeYvp + '\', \'' + safeName + '\')">Reset Password</button> ';
+    html += '<button class="btn btn-danger btn-sm" onclick="deleteEmployee(\'' + safeYvp + '\')">Delete</button> ';
+    html += '<button class="btn btn-secondary btn-sm" onclick="toggleEmployeeAccordion(\'' + safeYvp + '\')">Close</button>';
+    html += '</div></td></tr>';
+    return html;
+  }).join('');
+}
+
+function toggleEmployeeAccordion(yvpId) {
+  const panel = document.getElementById('emp-panel-' + yvpId);
+  const btn = document.getElementById('emp-btn-' + yvpId);
+  if (!panel) return;
+  const isOpen = panel.classList.contains('open');
+  // Close all panels first — only one open at a time
+  document.querySelectorAll('.emp-acc-panel.open').forEach(function(p){ p.classList.remove('open'); });
+  document.querySelectorAll('.emp-acc-toggle.active').forEach(function(b){
+    b.classList.remove('active');
+    b.textContent = 'Employee Info ▾';
+  });
+  if (!isOpen) {
+    panel.classList.add('open');
+    if (btn) {
+      btn.classList.add('active');
+      btn.textContent = 'Employee Info ▴';
+    }
+  }
+}
+
+function showEmployeeInfo(yvpId) {
+  toggleEmployeeAccordion(yvpId);
+}
+
+
+async function createLoginForEmployee(yvpId) {
+  if (!yvpId) return;
+  const _db = (typeof getDb === 'function') ? getDb() : db;
+  const _auth = (typeof getAuth === 'function') ? getAuth() : auth;
+
+  let emp = null;
+  try {
+    const empDoc = await _db.collection('employees').doc(yvpId).get();
+    if (empDoc.exists) emp = empDoc.data();
+    if (!emp) {
+      const q = await _db.collection('employees').where('yvpId', '==', yvpId).get();
+      if (!q.empty) emp = q.docs[0].data();
+    }
+  } catch (e) { console.error(e); }
+  if (!emp) {
+    showToast('Employee not found', 'error');
+    return;
+  }
+
+  const username = String(yvpId).toLowerCase().replace(/\s+/g, '');
+  const password = yvpId; // default password = exact YVP ID
+  const fullName = [emp.firstName, emp.lastName].filter(Boolean).join(' ').trim()
+    || [emp.firstName, emp.middleName, emp.lastName].filter(Boolean).join(' ').trim()
+    || yvpId;
+  const email = username + '@yvp-timekeeping.internal';
+
+  // Existing Firestore user profile?
+  let existingSnap = await _db.collection('users').where('username', '==', username).get();
+
+  // If profile exists, re-link to this employee and set pending default password
+  if (!existingSnap.empty) {
+    const docRef = existingSnap.docs[0].ref;
+    try {
+      await docRef.set({
+        username: username,
+        name: fullName,
+        role: existingSnap.docs[0].data().role || 'rank_file',
+        yvpId: emp.yvpId || yvpId,
+        email: email,
+        pendingPassword: password,
+        passwordResetToDefault: true,
+        passwordResetAt: firebase.firestore.FieldValue.serverTimestamp(),
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+      }, { merge: true });
+    } catch (e) {
+      console.error(e);
+    }
+    showInfoModal(
+      'Login Already Exists — Relinked',
+      'Username: ' + username + '\nDefault password: ' + password + '\n\n' +
+      'This login was left over from before. It is now linked again to this employee.\n\n' +
+      'If login still fails, the Auth password may be old. Options:\n' +
+      '1) Try password: ' + password + '\n' +
+      '2) Firebase Console → Authentication → find ' + email + ' → Reset password / Delete user, then click Create Login again.\n' +
+      '3) Or click Reset Password on Employee Info, then have the employee use the default password.'
+    );
+    return;
+  }
+
+  // No Firestore profile — create Auth + profile
+  try {
+    const cred = await _auth.createUserWithEmailAndPassword(email, password);
+    await _db.collection('users').doc(cred.user.uid).set({
+      username: username,
+      name: fullName,
+      role: 'rank_file',
+      yvpId: emp.yvpId || yvpId,
+      email: email,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    showInfoModal('Login Created', 'Username: ' + username + '\nPassword: ' + password);
+  } catch (e) {
+    console.error(e);
+    if (e.code === 'auth/email-already-in-use') {
+      // Auth user exists but no (or missing) Firestore profile — recreate profile
+      try {
+        await _db.collection('users').add({
+          username: username,
+          name: fullName,
+          role: 'rank_file',
+          yvpId: emp.yvpId || yvpId,
+          email: email,
+          pendingPassword: password,
+          passwordResetToDefault: true,
+          createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+      } catch (e2) { console.error(e2); }
+      showInfoModal(
+        'Auth Account Already Exists',
+        'Firebase Auth already has: ' + email + '\nUsername: ' + username + '\n\n' +
+        'A user profile was created/linked in the database.\n\n' +
+        'If you cannot log in with password "' + password + '", go to:\n' +
+        'Firebase Console → Authentication → Users → select this user →\n' +
+        'Delete user (or reset password), then click Create Login again.'
+      );
+    } else {
+      showToast('Failed to create login: ' + e.message, 'error');
+    }
+  }
+}
+
+
+async function deleteEmployee(yvpId) {
+  if (!yvpId) { showToast('Missing YVP ID', 'error'); return; }
+  if (!confirm('Delete employee ' + yvpId + '? This cannot be undone.\n\nTheir Users login profile will also be removed when possible.')) return;
+  try {
+    const _db = (typeof getDb === 'function') ? getDb() : db;
+    const ref = _db.collection('employees').doc(yvpId);
+    const doc = await ref.get();
+    if (doc.exists) {
+      await ref.delete();
+    } else {
+      const q = await _db.collection('employees').where('yvpId', '==', yvpId).get();
+      if (q.empty) {
+        showToast('Employee not found', 'error');
+        return;
+      }
+      for (const d of q.docs) { await d.ref.delete(); }
+    }
+    const username = String(yvpId).toLowerCase().replace(/\s+/g, '');
+    try {
+      const uq = await _db.collection('users').where('username', '==', username).get();
+      for (const d of uq.docs) { await d.ref.delete(); }
+      const uq2 = await _db.collection('users').where('yvpId', '==', yvpId).get();
+      for (const d of uq2.docs) { await d.ref.delete(); }
+    } catch (e2) { console.error(e2); }
+
+    if (typeof cachedEmployees !== 'undefined') {
+      cachedEmployees = (cachedEmployees || []).filter(function(e){ return e.yvpId !== yvpId; });
+    }
+    showToast('Employee ' + yvpId + ' deleted');
+    if (typeof loadEmployees === 'function') loadEmployees();
+    if (typeof preloadGlobalData === 'function') preloadGlobalData();
+  } catch (e) {
+    console.error(e);
+    showToast('Failed to delete employee: ' + e.message, 'error');
+  }
+}
+
+</script>
+</body>
+</html>
