@@ -4,1400 +4,10 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>YVP Timekeeping System</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js">
-// ── ATTENDANCE HISTORY ────────────────────────────────
-async function logAttendanceHistory(yvpId, name, transaction) {
-  try {
-    await getDb().collection('attendance_history').add({
-      yvpId: yvpId || '',
-      name: name || '',
-      transaction: transaction || '',
-      timestamp: firebase.firestore.FieldValue.serverTimestamp(),
-      timestampText: new Date().toLocaleString('en-US'),
-      byUser: (CU && (CU.username || CU.name)) || 'system'
-    });
-  } catch (e) {
-    console.error('History log failed', e);
-  }
-}
-
-async function loadHistory() {
-  const tbody = document.getElementById('historyTbody');
-  if (!tbody) return;
-  try {
-    const snap = await getDb().collection('attendance_history').orderBy('timestamp', 'desc').limit(500).get();
-    const rows = snap.docs.map(d => d.data());
-    tbody.innerHTML = rows.length ? rows.map(r => `
-      <tr>
-        <td>${r.yvpId || '—'}</td>
-        <td>${r.name || '—'}</td>
-        <td>${r.transaction || '—'}</td>
-        <td>${r.timestampText || (r.timestamp && r.timestamp.toDate ? r.timestamp.toDate().toLocaleString('en-US') : '—')}</td>
-      </tr>
-    `).join('') : `<tr><td colspan="4" style="text-align:center;color:#999">No history records</td></tr>`;
-  } catch (e) {
-    console.error(e);
-    // Fallback without orderBy if index missing
-    try {
-      const snap = await getDb().collection('attendance_history').limit(500).get();
-      const rows = snap.docs.map(d => d.data()).sort((a,b) => (b.timestampText||'').localeCompare(a.timestampText||''));
-      tbody.innerHTML = rows.length ? rows.map(r => `
-        <tr>
-          <td>${r.yvpId || '—'}</td>
-          <td>${r.name || '—'}</td>
-          <td>${r.transaction || '—'}</td>
-          <td>${r.timestampText || '—'}</td>
-        </tr>
-      `).join('') : `<tr><td colspan="4" style="text-align:center;color:#999">No history records</td></tr>`;
-    } catch (e2) {
-      tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;color:#c62828">Failed to load history</td></tr>`;
-    }
-  }
-}
-
-async function exportHistoryReport() {
-  try {
-    let rowsData = [];
-    try {
-      const snap = await getDb().collection('attendance_history').orderBy('timestamp', 'desc').limit(2000).get();
-      rowsData = snap.docs.map(d => d.data());
-    } catch (e) {
-      const snap = await getDb().collection('attendance_history').limit(2000).get();
-      rowsData = snap.docs.map(d => d.data());
-    }
-    const headers = ['YVP ID', 'Name', 'Transaction', 'Date & Time', 'By User'];
-    const rows = rowsData.map(r => [
-      r.yvpId || '',
-      r.name || '',
-      r.transaction || '',
-      r.timestampText || '',
-      r.byUser || ''
-    ]);
-    const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'History');
-    XLSX.writeFile(wb, 'YVP_Attendance_History_' + new Date().toISOString().slice(0,10) + '.xlsx');
-    showToast('History report downloaded');
-  } catch (e) {
-    console.error(e);
-    showToast('Failed to export history', 'error');
-  }
-}
-
-function editAttendanceFromReport(logId, yvpId, name, date, timeIn, timeOut) {
-  document.getElementById('editAttDocId').value = logId;
-  document.getElementById('editAttYvpId').value = yvpId || '';
-  document.getElementById('editAttDate').value = date || '';
-  document.getElementById('editAttName').value = name || yvpId || '';
-  document.getElementById('editAttDateDisplay').value = date || '';
-  document.getElementById('editAttTimeIn').value = (timeIn && timeIn !== '—') ? timeIn : '';
-  document.getElementById('editAttTimeOut').value = (timeOut && timeOut !== '—') ? timeOut : '';
-  document.getElementById('editAttModal').classList.add('active');
-}
-
-
-// ── DEPARTMENTS & INVOICE ─────────────────────────────
-const DEFAULT_DEPARTMENTS = ['Twinacre Ventures LLC', 'Vandelay Real Estate'];
-
-async function loadDepartmentList() {
-  let depts = DEFAULT_DEPARTMENTS.slice();
-  try {
-    const snap = await getDb().collection('departments').get();
-    snap.docs.forEach(d => {
-      const n = d.data().name;
-      if (n && depts.indexOf(n) === -1) depts.push(n);
-    });
-  } catch (e) {}
-  // also from employees
-  (cachedEmployees || []).forEach(e => {
-    if (e.department && depts.indexOf(e.department) === -1) depts.push(e.department);
-  });
-  return depts;
-}
-
-async function loadDepartmentsIntoInvoice() {
-  const depts = await loadDepartmentList();
-  const sel = document.getElementById('invDepartment');
-  const fDept = document.getElementById('fDepartment');
-  if (sel) {
-    const cur = sel.value;
-    sel.innerHTML = depts.map(d => `<option value="${d}">${d}</option>`).join('');
-    if (cur && depts.indexOf(cur) >= 0) sel.value = cur;
-  }
-  if (fDept) {
-    const cur = fDept.value;
-    fDept.innerHTML = '<option value="">— Select —</option>' + depts.map(d => `<option value="${d}">${d}</option>`).join('');
-    if (cur) fDept.value = cur;
-  }
-  if (typeof refreshInvoiceAgents === "function") await refreshInvoiceAgents();
-}
-
-function showAddDepartment() {
-  document.getElementById('newDeptName').value = '';
-  document.getElementById('addDeptModal').classList.add('active');
-}
-
-async function saveNewDepartment() {
-  const name = (document.getElementById('newDeptName').value || '').trim();
-  if (!name) { showToast('Enter department name', 'error'); return; }
-  try {
-    await getDb().collection('departments').doc(name.replace(/\//g,'_')).set({
-      name,
-      createdAt: firebase.firestore.FieldValue.serverTimestamp()
-    });
-    closeModal('addDeptModal');
-    await loadDepartmentsIntoInvoice();
-    const sel = document.getElementById('invDepartment');
-    if (sel) sel.value = name;
-    showToast('Department added');
-    refreshInvoiceAgents();
-  } catch (e) {
-    showToast('Failed to add department: ' + e.message, 'error');
-  }
-}
-
-async function generateInvoiceNumber() {
-  try {
-    const ref = getDb().collection('meta').doc('invoiceCounter');
-    const num = await getDb().runTransaction(async (tx) => {
-      const doc = await tx.get(ref);
-      let next = 1;
-      if (doc.exists && doc.data().last) next = (parseInt(doc.data().last, 10) || 0) + 1;
-      tx.set(ref, { last: next }, { merge: true });
-      return next;
-    });
-    const invNo = 'YVP-INV' + String(num).padStart(4, '0');
-    document.getElementById('invNumber').value = invNo;
-    if (typeof saveInvoiceToTracker === 'function') { saveInvoiceToTracker(); }
-    showToast('Invoice number: ' + invNo);
-  } catch (e) {
-    console.error(e);
-    // fallback local sequential in localStorage
-    let n = parseInt(localStorage.getItem('yvp_inv_counter') || '0', 10) + 1;
-    localStorage.setItem('yvp_inv_counter', String(n));
-    const invNo = 'YVP-INV' + String(n).padStart(4, '0');
-    document.getElementById('invNumber').value = invNo;
-    if (typeof saveInvoiceToTracker === 'function') { saveInvoiceToTracker(); }
-    showToast('Invoice number: ' + invNo + ' (local)');
-  }
-}
-
-async function refreshInvoiceAgents() {
-  const deptEl = document.getElementById('invDepartment');
-  const dept = (deptEl && deptEl.value) ? deptEl.value.trim() : '';
-  const fromDate = (document.getElementById('invFrom') || {}).value || '';
-  const toDate = (document.getElementById('invTo') || {}).value || '';
-  const label = document.getElementById('invDeptLabel');
-  if (label) label.textContent = dept || '—';
-  if (typeof applyInvoiceDefaultsByDepartment === 'function') applyInvoiceDefaultsByDepartment(dept);
-  const tbody = document.getElementById('invAgentsTbody');
-  if (!tbody) return;
-
-  let empsAll = (typeof cachedEmployees !== 'undefined' && cachedEmployees && cachedEmployees.length)
-    ? cachedEmployees.slice()
-    : [];
-  if (!empsAll.length) {
-    try {
-      const eSnap = await getDb().collection('employees').get();
-      empsAll = eSnap.docs.map(d => ({ id: d.id, ...d.data(), yvpId: d.data().yvpId || d.id }));
-      cachedEmployees = empsAll;
-    } catch (e) { console.error(e); }
-  }
-
-  const norm = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
-  const deptN = norm(dept);
-
-  let emps = empsAll.filter(e => {
-    const d = norm(e.department);
-    if (!d || !deptN) return false;
-    return d === deptN || d.indexOf(deptN) >= 0 || deptN.indexOf(d) >= 0;
-  });
-
-  const hoursMap = {};
-  try {
-    const aSnap = await getDb().collection('attendance').get();
-    aSnap.docs.forEach(d => {
-      const l = d.data();
-      if (!l.timeIn || !l.timeOut) return;
-      if (fromDate && l.date < fromDate) return;
-      if (toDate && l.date > toDate) return;
-      let hrs = parseFloat(l.totalHours) || 0;
-      if (hrs > 6) hrs = 6;
-      hoursMap[l.yvpId] = (hoursMap[l.yvpId] || 0) + hrs;
-    });
-  } catch (e) { console.error(e); }
-
-  let totalDue = 0;
-  window._invoiceRows = [];
-
-  if (!dept) {
-    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#999;padding:16px">Select a department</td></tr>';
-  } else if (!emps.length) {
-    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#c62828;padding:16px">No employees under <b>' + dept + '</b>.<br><span style="color:#666;font-size:12px">Go to Employees menu and set Department to this name, then return here.</span></td></tr>';
-  } else {
-    tbody.innerHTML = emps.map(e => {
-      const name = [e.firstName, e.middleName, e.lastName].filter(Boolean).join(' ')
-        || (typeof getEmployeeFullName === 'function' ? getEmployeeFullName(e.yvpId) : '')
-        || e.yvpId || '';
-      const hrs = Math.round((hoursMap[e.yvpId] || 0) * 100) / 100;
-      const rate = parseFloat(e.hourlyRate) || 0;
-      const total = hrs * rate;
-      totalDue += total;
-      window._invoiceRows.push({ name, hrs, rate, total, yvpId: e.yvpId });
-      const safeName = String(name).replace(/"/g, '&quot;');
-      return '<tr>'
-        + '<td><input type="text" class="inv-edit-name" value="' + safeName + '" style="width:100%;border:1px dashed #ccc;padding:4px 6px"/></td>'
-        + '<td><input type="number" class="inv-edit-hrs" value="' + hrs + '" step="0.01" style="width:90px;border:1px dashed #ccc;padding:4px 6px" oninput="recalcInvoiceRow(this)"/></td>'
-        + '<td><input type="number" class="inv-edit-rate" value="' + Math.round(rate) + '" step="1" style="width:90px;border:1px dashed #ccc;padding:4px 6px" oninput="recalcInvoiceRow(this)"/></td>'
-        + '<td><input type="text" class="inv-edit-total" value="$' + total.toFixed(2) + '" style="width:100px;border:1px dashed #ccc;padding:4px 6px"/></td>'
-        + '</tr>';
-    }).join('');
-  }
-
-  const dueEl = document.getElementById('invTotalDue');
-  if (dueEl) {
-    if (dueEl.tagName === 'INPUT') dueEl.value = '$' + totalDue.toFixed(2);
-    else dueEl.textContent = '$' + totalDue.toFixed(2);
-  }
-  window._invoiceTotalDue = totalDue;
-}
-
-
-
-function uploadInvoiceQr(event) {
-  const file = event.target.files[0];
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = function(e) {
-    const prev = document.getElementById('invQrPreview');
-    prev.innerHTML = '<img src="' + e.target.result + '" alt="QR" style="width:120px;height:160px;object-fit:cover;border:1px solid #ccc;border-radius:4px"/>';
-    window._invoiceQrDataUrl = e.target.result;
-  };
-  reader.readAsDataURL(file);
-}
-
-async function exportInvoiceExcel() {
-  if (typeof saveInvoiceToTracker === 'function') { try { await saveInvoiceToTracker(); } catch(e){} }
-
-  const dept = (document.getElementById('invDepartment') || {}).value || '';
-  const invNo = (document.getElementById('invNumber') || {}).value || '';
-  const client = (document.getElementById('invClientName') || {}).value || '';
-  const email = (document.getElementById('invClientEmail') || {}).value || '';
-  const fromDate = (document.getElementById('invFrom') || {}).value || '';
-  const toDate = (document.getElementById('invTo') || {}).value || '';
-  let rows = [];
-  document.querySelectorAll('#invAgentsTbody tr').forEach(tr => {
-    const name = tr.querySelector('.inv-edit-name')?.value || tr.cells[0]?.innerText || '';
-    const hrs = parseFloat(tr.querySelector('.inv-edit-hrs')?.value) || 0;
-    const rate = parseFloat(tr.querySelector('.inv-edit-rate')?.value) || 0;
-    const totalStr = (tr.querySelector('.inv-edit-total')?.value || '').replace(/[^0-9.\-]/g,'');
-    const total = parseFloat(totalStr) || (hrs * rate);
-    if (name) rows.push({ name, hrs, rate, total });
-  });
-  if (!rows.length) rows = window._invoiceRows || [];
-  const dueRaw = (document.getElementById('invTotalDue')?.value || document.getElementById('invTotalDue')?.textContent || '').replace(/[^0-9.\-]/g,'');
-  const totalDue = parseFloat(dueRaw) || window._invoiceTotalDue || 0;
-
-  const aoa = [
-    ['YVP Administrative Support Services'],
-    ['Phone: ' + ((document.getElementById('invPhone')||{}).value || ''), 'Email: ' + ((document.getElementById('invEmailFrom')||{}).value || '')],
-    [],
-    [(document.getElementById('invTitle')||{}).value || 'INVOICE'],
-    [],
-    ['NAME', client],
-    ['EMAIL', email],
-    ['Invoice No.', invNo],
-    ['Coverage From', fromDate, 'Coverage To', toDate],
-    ['Department', dept],
-    [],
-    ['Name', 'Hours Worked', 'Hourly Rate', 'Total'],
-    ...rows.map(r => [r.name, r.hrs, '$' + Math.round(r.rate), '$' + r.total.toFixed(2)]),
-    [],
-    ['TOTAL DUE', '', '', '$' + totalDue.toFixed(2)],
-    [],
-    ['Payment Instructions', (document.getElementById('invPayInstr')||{}).value || ''],
-    ['Bank Details', (document.getElementById('invBank')||{}).value || '']
-  ];
-  const ws = XLSX.utils.aoa_to_sheet(aoa);
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Invoice');
-  XLSX.writeFile(wb, (invNo || 'YVP_Invoice') + '.xlsx');
-  showToast('Invoice Excel downloaded');
-}
-
-
-
-
-
-
-function removeInvoiceQr() {
-  const prev = document.getElementById('invQrPreview');
-  if (prev) prev.innerHTML = '<span style="color:#999;font-size:13px">No QR code uploaded</span>';
-  window._invoiceQrDataUrl = null;
-  const f = document.getElementById('invQrFile');
-  if (f) f.value = '';
-  showToast('QR code removed');
-}
-
-function recalcInvoiceRow(el) {
-  try {
-    const tr = el.closest('tr');
-    if (!tr) return;
-    const hrs = parseFloat(tr.querySelector('.inv-edit-hrs')?.value) || 0;
-    const rate = parseFloat(tr.querySelector('.inv-edit-rate')?.value) || 0;
-    const total = hrs * rate;
-    const totEl = tr.querySelector('.inv-edit-total');
-    if (totEl) totEl.value = '$' + total.toFixed(2);
-    // sum all totals
-    let sum = 0;
-    document.querySelectorAll('#invAgentsTbody tr').forEach(row => {
-      const t = (row.querySelector('.inv-edit-total')?.value || '').replace(/[^0-9.\-]/g,'');
-      sum += parseFloat(t) || 0;
-    });
-    const dueEl = document.getElementById('invTotalDue');
-    if (dueEl) {
-      if (dueEl.tagName === 'INPUT') dueEl.value = '$' + sum.toFixed(2);
-      else dueEl.textContent = '$' + sum.toFixed(2);
-    }
-    window._invoiceTotalDue = sum;
-  } catch (e) { console.error(e); }
-}
-
-
-
-
-
-
-
-
-
-
-
-
-</script>
-<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js">
-// ── ATTENDANCE HISTORY ────────────────────────────────
-async function logAttendanceHistory(yvpId, name, transaction) {
-  try {
-    await getDb().collection('attendance_history').add({
-      yvpId: yvpId || '',
-      name: name || '',
-      transaction: transaction || '',
-      timestamp: firebase.firestore.FieldValue.serverTimestamp(),
-      timestampText: new Date().toLocaleString('en-US'),
-      byUser: (CU && (CU.username || CU.name)) || 'system'
-    });
-  } catch (e) {
-    console.error('History log failed', e);
-  }
-}
-
-async function loadHistory() {
-  const tbody = document.getElementById('historyTbody');
-  if (!tbody) return;
-  try {
-    const snap = await getDb().collection('attendance_history').orderBy('timestamp', 'desc').limit(500).get();
-    const rows = snap.docs.map(d => d.data());
-    tbody.innerHTML = rows.length ? rows.map(r => `
-      <tr>
-        <td>${r.yvpId || '—'}</td>
-        <td>${r.name || '—'}</td>
-        <td>${r.transaction || '—'}</td>
-        <td>${r.timestampText || (r.timestamp && r.timestamp.toDate ? r.timestamp.toDate().toLocaleString('en-US') : '—')}</td>
-      </tr>
-    `).join('') : `<tr><td colspan="4" style="text-align:center;color:#999">No history records</td></tr>`;
-  } catch (e) {
-    console.error(e);
-    // Fallback without orderBy if index missing
-    try {
-      const snap = await getDb().collection('attendance_history').limit(500).get();
-      const rows = snap.docs.map(d => d.data()).sort((a,b) => (b.timestampText||'').localeCompare(a.timestampText||''));
-      tbody.innerHTML = rows.length ? rows.map(r => `
-        <tr>
-          <td>${r.yvpId || '—'}</td>
-          <td>${r.name || '—'}</td>
-          <td>${r.transaction || '—'}</td>
-          <td>${r.timestampText || '—'}</td>
-        </tr>
-      `).join('') : `<tr><td colspan="4" style="text-align:center;color:#999">No history records</td></tr>`;
-    } catch (e2) {
-      tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;color:#c62828">Failed to load history</td></tr>`;
-    }
-  }
-}
-
-async function exportHistoryReport() {
-  try {
-    let rowsData = [];
-    try {
-      const snap = await getDb().collection('attendance_history').orderBy('timestamp', 'desc').limit(2000).get();
-      rowsData = snap.docs.map(d => d.data());
-    } catch (e) {
-      const snap = await getDb().collection('attendance_history').limit(2000).get();
-      rowsData = snap.docs.map(d => d.data());
-    }
-    const headers = ['YVP ID', 'Name', 'Transaction', 'Date & Time', 'By User'];
-    const rows = rowsData.map(r => [
-      r.yvpId || '',
-      r.name || '',
-      r.transaction || '',
-      r.timestampText || '',
-      r.byUser || ''
-    ]);
-    const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'History');
-    XLSX.writeFile(wb, 'YVP_Attendance_History_' + new Date().toISOString().slice(0,10) + '.xlsx');
-    showToast('History report downloaded');
-  } catch (e) {
-    console.error(e);
-    showToast('Failed to export history', 'error');
-  }
-}
-
-function editAttendanceFromReport(logId, yvpId, name, date, timeIn, timeOut) {
-  document.getElementById('editAttDocId').value = logId;
-  document.getElementById('editAttYvpId').value = yvpId || '';
-  document.getElementById('editAttDate').value = date || '';
-  document.getElementById('editAttName').value = name || yvpId || '';
-  document.getElementById('editAttDateDisplay').value = date || '';
-  document.getElementById('editAttTimeIn').value = (timeIn && timeIn !== '—') ? timeIn : '';
-  document.getElementById('editAttTimeOut').value = (timeOut && timeOut !== '—') ? timeOut : '';
-  document.getElementById('editAttModal').classList.add('active');
-}
-
-
-// ── DEPARTMENTS & INVOICE ─────────────────────────────
-const DEFAULT_DEPARTMENTS = ['Twinacre Ventures LLC', 'Vandelay Real Estate'];
-
-async function loadDepartmentList() {
-  let depts = DEFAULT_DEPARTMENTS.slice();
-  try {
-    const snap = await getDb().collection('departments').get();
-    snap.docs.forEach(d => {
-      const n = d.data().name;
-      if (n && depts.indexOf(n) === -1) depts.push(n);
-    });
-  } catch (e) {}
-  // also from employees
-  (cachedEmployees || []).forEach(e => {
-    if (e.department && depts.indexOf(e.department) === -1) depts.push(e.department);
-  });
-  return depts;
-}
-
-async function loadDepartmentsIntoInvoice() {
-  const depts = await loadDepartmentList();
-  const sel = document.getElementById('invDepartment');
-  const fDept = document.getElementById('fDepartment');
-  if (sel) {
-    const cur = sel.value;
-    sel.innerHTML = depts.map(d => `<option value="${d}">${d}</option>`).join('');
-    if (cur && depts.indexOf(cur) >= 0) sel.value = cur;
-  }
-  if (fDept) {
-    const cur = fDept.value;
-    fDept.innerHTML = '<option value="">— Select —</option>' + depts.map(d => `<option value="${d}">${d}</option>`).join('');
-    if (cur) fDept.value = cur;
-  }
-}
-
-function showAddDepartment() {
-  document.getElementById('newDeptName').value = '';
-  document.getElementById('addDeptModal').classList.add('active');
-}
-
-async function saveNewDepartment() {
-  const name = (document.getElementById('newDeptName').value || '').trim();
-  if (!name) { showToast('Enter department name', 'error'); return; }
-  try {
-    await getDb().collection('departments').doc(name.replace(/\//g,'_')).set({
-      name,
-      createdAt: firebase.firestore.FieldValue.serverTimestamp()
-    });
-    closeModal('addDeptModal');
-    await loadDepartmentsIntoInvoice();
-    const sel = document.getElementById('invDepartment');
-    if (sel) sel.value = name;
-    showToast('Department added');
-    refreshInvoiceAgents();
-  } catch (e) {
-    showToast('Failed to add department: ' + e.message, 'error');
-  }
-}
-
-async function generateInvoiceNumber() {
-  try {
-    const ref = getDb().collection('meta').doc('invoiceCounter');
-    const num = await getDb().runTransaction(async (tx) => {
-      const doc = await tx.get(ref);
-      let next = 1;
-      if (doc.exists && doc.data().last) next = (parseInt(doc.data().last, 10) || 0) + 1;
-      tx.set(ref, { last: next }, { merge: true });
-      return next;
-    });
-    const invNo = 'YVP-INV' + String(num).padStart(4, '0');
-    document.getElementById('invNumber').value = invNo;
-    if (typeof saveInvoiceToTracker === 'function') { saveInvoiceToTracker(); }
-    showToast('Invoice number: ' + invNo);
-  } catch (e) {
-    console.error(e);
-    // fallback local sequential in localStorage
-    let n = parseInt(localStorage.getItem('yvp_inv_counter') || '0', 10) + 1;
-    localStorage.setItem('yvp_inv_counter', String(n));
-    const invNo = 'YVP-INV' + String(n).padStart(4, '0');
-    document.getElementById('invNumber').value = invNo;
-    if (typeof saveInvoiceToTracker === 'function') { saveInvoiceToTracker(); }
-    showToast('Invoice number: ' + invNo + ' (local)');
-  }
-}
-
-async function refreshInvoiceAgents() {
-  const dept = (document.getElementById('invDepartment') || {}).value || '';
-  const fromDate = (document.getElementById('invFrom') || {}).value || '';
-  const toDate = (document.getElementById('invTo') || {}).value || '';
-  const label = document.getElementById('invDeptLabel');
-  if (label) label.textContent = dept;
-  const tbody = document.getElementById('invAgentsTbody');
-  if (!tbody) return;
-
-  const emps = (cachedEmployees || []).filter(e => (e.department || '') === dept);
-  // hours from attendance
-  const aSnap = await getDb().collection('attendance').get();
-  const hoursMap = {};
-  aSnap.docs.forEach(d => {
-    const l = d.data();
-    if (!l.timeIn || !l.timeOut) return;
-    if (fromDate && l.date < fromDate) return;
-    if (toDate && l.date > toDate) return;
-    let hrs = parseFloat(l.totalHours) || 0;
-    if (hrs > 6) hrs = 6;
-    hoursMap[l.yvpId] = (hoursMap[l.yvpId] || 0) + hrs;
-  });
-
-  let totalDue = 0;
-  if (!emps.length) {
-    tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;color:#999">No employees in this department</td></tr>`;
-  } else {
-    tbody.innerHTML = emps.map(e => {
-      const name = [e.firstName, e.middleName, e.lastName].filter(Boolean).join(' ') || e.yvpId;
-      const hrs = Math.round((hoursMap[e.yvpId] || 0) * 100) / 100;
-      const rate = parseFloat(e.hourlyRate) || 0;
-      const total = hrs * rate;
-      totalDue += total;
-      return `<tr>
-        <td><input type="text" class="inv-edit-name" value="${name.replace(/"/g,'&quot;')}" style="width:100%;border:1px dashed #ccc;padding:4px 6px"/></td>
-        <td><input type="number" class="inv-edit-hrs" value="${hrs}" step="0.01" style="width:90px;border:1px dashed #ccc;padding:4px 6px" oninput="recalcInvoiceRow(this)"/></td>
-        <td><input type="number" class="inv-edit-rate" value="${Math.round(rate)}" step="1" style="width:90px;border:1px dashed #ccc;padding:4px 6px" oninput="recalcInvoiceRow(this)"/></td>
-        <td><input type="text" class="inv-edit-total" value="$${total.toFixed(2)}" style="width:100px;border:1px dashed #ccc;padding:4px 6px"/></td>
-      </tr>`;
-    }).join('');
-  }
-  const dueEl = document.getElementById('invTotalDue');
-  if (dueEl) {
-    if (dueEl.tagName === 'INPUT') dueEl.value = '$' + totalDue.toFixed(2);
-    else dueEl.textContent = '$' + totalDue.toFixed(2);
-  }
-  window._invoiceTotalDue = totalDue;
-  window._invoiceRows = emps.map(e => {
-    const name = [e.firstName, e.middleName, e.lastName].filter(Boolean).join(' ') || e.yvpId;
-    const hrs = Math.round((hoursMap[e.yvpId] || 0) * 100) / 100;
-    const rate = parseFloat(e.hourlyRate) || 0;
-    return { name, hrs, rate, total: hrs * rate };
-  });
-}
-
-function uploadInvoiceQr(event) {
-  const file = event.target.files[0];
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = function(e) {
-    const prev = document.getElementById('invQrPreview');
-    prev.innerHTML = '<img src="' + e.target.result + '" alt="QR" style="width:120px;height:160px;object-fit:cover;border:1px solid #ccc;border-radius:4px"/>';
-    window._invoiceQrDataUrl = e.target.result;
-  };
-  reader.readAsDataURL(file);
-}
-
-async function exportInvoiceExcel() {
-  if (typeof saveInvoiceToTracker === 'function') { try { await saveInvoiceToTracker(); } catch(e){} }
-
-  const dept = (document.getElementById('invDepartment') || {}).value || '';
-  const invNo = (document.getElementById('invNumber') || {}).value || '';
-  const client = (document.getElementById('invClientName') || {}).value || '';
-  const email = (document.getElementById('invClientEmail') || {}).value || '';
-  const fromDate = (document.getElementById('invFrom') || {}).value || '';
-  const toDate = (document.getElementById('invTo') || {}).value || '';
-  let rows = [];
-  document.querySelectorAll('#invAgentsTbody tr').forEach(tr => {
-    const name = tr.querySelector('.inv-edit-name')?.value || tr.cells[0]?.innerText || '';
-    const hrs = parseFloat(tr.querySelector('.inv-edit-hrs')?.value) || 0;
-    const rate = parseFloat(tr.querySelector('.inv-edit-rate')?.value) || 0;
-    const totalStr = (tr.querySelector('.inv-edit-total')?.value || '').replace(/[^0-9.\-]/g,'');
-    const total = parseFloat(totalStr) || (hrs * rate);
-    if (name) rows.push({ name, hrs, rate, total });
-  });
-  if (!rows.length) rows = window._invoiceRows || [];
-  const dueRaw = (document.getElementById('invTotalDue')?.value || document.getElementById('invTotalDue')?.textContent || '').replace(/[^0-9.\-]/g,'');
-  const totalDue = parseFloat(dueRaw) || window._invoiceTotalDue || 0;
-
-  const aoa = [
-    ['YVP Administrative Support Services'],
-    ['Phone: ' + ((document.getElementById('invPhone')||{}).value || ''), 'Email: ' + ((document.getElementById('invEmailFrom')||{}).value || '')],
-    [],
-    [(document.getElementById('invTitle')||{}).value || 'INVOICE'],
-    [],
-    ['NAME', client],
-    ['EMAIL', email],
-    ['Invoice No.', invNo],
-    ['Coverage From', fromDate, 'Coverage To', toDate],
-    ['Department', dept],
-    [],
-    ['Name', 'Hours Worked', 'Hourly Rate', 'Total'],
-    ...rows.map(r => [r.name, r.hrs, '$' + Math.round(r.rate), '$' + r.total.toFixed(2)]),
-    [],
-    ['TOTAL DUE', '', '', '$' + totalDue.toFixed(2)],
-    [],
-    ['Payment Instructions', (document.getElementById('invPayInstr')||{}).value || ''],
-    ['Bank Details', (document.getElementById('invBank')||{}).value || '']
-  ];
-  const ws = XLSX.utils.aoa_to_sheet(aoa);
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Invoice');
-  XLSX.writeFile(wb, (invNo || 'YVP_Invoice') + '.xlsx');
-  showToast('Invoice Excel downloaded');
-}
-
-
-
-
-function removeInvoiceQr() {
-  const prev = document.getElementById('invQrPreview');
-  if (prev) prev.innerHTML = '<span style="color:#999;font-size:13px">No QR code uploaded</span>';
-  window._invoiceQrDataUrl = null;
-  const f = document.getElementById('invQrFile');
-  if (f) f.value = '';
-  showToast('QR code removed');
-}
-
-function recalcInvoiceRow(el) {
-  try {
-    const tr = el.closest('tr');
-    if (!tr) return;
-    const hrs = parseFloat(tr.querySelector('.inv-edit-hrs')?.value) || 0;
-    const rate = parseFloat(tr.querySelector('.inv-edit-rate')?.value) || 0;
-    const total = hrs * rate;
-    const totEl = tr.querySelector('.inv-edit-total');
-    if (totEl) totEl.value = '$' + total.toFixed(2);
-    // sum all totals
-    let sum = 0;
-    document.querySelectorAll('#invAgentsTbody tr').forEach(row => {
-      const t = (row.querySelector('.inv-edit-total')?.value || '').replace(/[^0-9.\-]/g,'');
-      sum += parseFloat(t) || 0;
-    });
-    const dueEl = document.getElementById('invTotalDue');
-    if (dueEl) {
-      if (dueEl.tagName === 'INPUT') dueEl.value = '$' + sum.toFixed(2);
-      else dueEl.textContent = '$' + sum.toFixed(2);
-    }
-    window._invoiceTotalDue = sum;
-  } catch (e) { console.error(e); }
-}
-
-
-
-
-
-
-
-
-
-
-
-
-</script>
-<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js">
-// ── ATTENDANCE HISTORY ────────────────────────────────
-async function logAttendanceHistory(yvpId, name, transaction) {
-  try {
-    await getDb().collection('attendance_history').add({
-      yvpId: yvpId || '',
-      name: name || '',
-      transaction: transaction || '',
-      timestamp: firebase.firestore.FieldValue.serverTimestamp(),
-      timestampText: new Date().toLocaleString('en-US'),
-      byUser: (CU && (CU.username || CU.name)) || 'system'
-    });
-  } catch (e) {
-    console.error('History log failed', e);
-  }
-}
-
-async function loadHistory() {
-  const tbody = document.getElementById('historyTbody');
-  if (!tbody) return;
-  try {
-    const snap = await getDb().collection('attendance_history').orderBy('timestamp', 'desc').limit(500).get();
-    const rows = snap.docs.map(d => d.data());
-    tbody.innerHTML = rows.length ? rows.map(r => `
-      <tr>
-        <td>${r.yvpId || '—'}</td>
-        <td>${r.name || '—'}</td>
-        <td>${r.transaction || '—'}</td>
-        <td>${r.timestampText || (r.timestamp && r.timestamp.toDate ? r.timestamp.toDate().toLocaleString('en-US') : '—')}</td>
-      </tr>
-    `).join('') : `<tr><td colspan="4" style="text-align:center;color:#999">No history records</td></tr>`;
-  } catch (e) {
-    console.error(e);
-    // Fallback without orderBy if index missing
-    try {
-      const snap = await getDb().collection('attendance_history').limit(500).get();
-      const rows = snap.docs.map(d => d.data()).sort((a,b) => (b.timestampText||'').localeCompare(a.timestampText||''));
-      tbody.innerHTML = rows.length ? rows.map(r => `
-        <tr>
-          <td>${r.yvpId || '—'}</td>
-          <td>${r.name || '—'}</td>
-          <td>${r.transaction || '—'}</td>
-          <td>${r.timestampText || '—'}</td>
-        </tr>
-      `).join('') : `<tr><td colspan="4" style="text-align:center;color:#999">No history records</td></tr>`;
-    } catch (e2) {
-      tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;color:#c62828">Failed to load history</td></tr>`;
-    }
-  }
-}
-
-async function exportHistoryReport() {
-  try {
-    let rowsData = [];
-    try {
-      const snap = await getDb().collection('attendance_history').orderBy('timestamp', 'desc').limit(2000).get();
-      rowsData = snap.docs.map(d => d.data());
-    } catch (e) {
-      const snap = await getDb().collection('attendance_history').limit(2000).get();
-      rowsData = snap.docs.map(d => d.data());
-    }
-    const headers = ['YVP ID', 'Name', 'Transaction', 'Date & Time', 'By User'];
-    const rows = rowsData.map(r => [
-      r.yvpId || '',
-      r.name || '',
-      r.transaction || '',
-      r.timestampText || '',
-      r.byUser || ''
-    ]);
-    const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'History');
-    XLSX.writeFile(wb, 'YVP_Attendance_History_' + new Date().toISOString().slice(0,10) + '.xlsx');
-    showToast('History report downloaded');
-  } catch (e) {
-    console.error(e);
-    showToast('Failed to export history', 'error');
-  }
-}
-
-function editAttendanceFromReport(logId, yvpId, name, date, timeIn, timeOut) {
-  document.getElementById('editAttDocId').value = logId;
-  document.getElementById('editAttYvpId').value = yvpId || '';
-  document.getElementById('editAttDate').value = date || '';
-  document.getElementById('editAttName').value = name || yvpId || '';
-  document.getElementById('editAttDateDisplay').value = date || '';
-  document.getElementById('editAttTimeIn').value = (timeIn && timeIn !== '—') ? timeIn : '';
-  document.getElementById('editAttTimeOut').value = (timeOut && timeOut !== '—') ? timeOut : '';
-  document.getElementById('editAttModal').classList.add('active');
-}
-
-
-// ── DEPARTMENTS & INVOICE ─────────────────────────────
-const DEFAULT_DEPARTMENTS = ['Twinacre Ventures LLC', 'Vandelay Real Estate'];
-
-async function loadDepartmentList() {
-  let depts = DEFAULT_DEPARTMENTS.slice();
-  try {
-    const snap = await getDb().collection('departments').get();
-    snap.docs.forEach(d => {
-      const n = d.data().name;
-      if (n && depts.indexOf(n) === -1) depts.push(n);
-    });
-  } catch (e) {}
-  // also from employees
-  (cachedEmployees || []).forEach(e => {
-    if (e.department && depts.indexOf(e.department) === -1) depts.push(e.department);
-  });
-  return depts;
-}
-
-async function loadDepartmentsIntoInvoice() {
-  const depts = await loadDepartmentList();
-  const sel = document.getElementById('invDepartment');
-  const fDept = document.getElementById('fDepartment');
-  if (sel) {
-    const cur = sel.value;
-    sel.innerHTML = depts.map(d => `<option value="${d}">${d}</option>`).join('');
-    if (cur && depts.indexOf(cur) >= 0) sel.value = cur;
-  }
-  if (fDept) {
-    const cur = fDept.value;
-    fDept.innerHTML = '<option value="">— Select —</option>' + depts.map(d => `<option value="${d}">${d}</option>`).join('');
-    if (cur) fDept.value = cur;
-  }
-}
-
-function showAddDepartment() {
-  document.getElementById('newDeptName').value = '';
-  document.getElementById('addDeptModal').classList.add('active');
-}
-
-async function saveNewDepartment() {
-  const name = (document.getElementById('newDeptName').value || '').trim();
-  if (!name) { showToast('Enter department name', 'error'); return; }
-  try {
-    await getDb().collection('departments').doc(name.replace(/\//g,'_')).set({
-      name,
-      createdAt: firebase.firestore.FieldValue.serverTimestamp()
-    });
-    closeModal('addDeptModal');
-    await loadDepartmentsIntoInvoice();
-    const sel = document.getElementById('invDepartment');
-    if (sel) sel.value = name;
-    showToast('Department added');
-    refreshInvoiceAgents();
-  } catch (e) {
-    showToast('Failed to add department: ' + e.message, 'error');
-  }
-}
-
-async function generateInvoiceNumber() {
-  try {
-    const ref = getDb().collection('meta').doc('invoiceCounter');
-    const num = await getDb().runTransaction(async (tx) => {
-      const doc = await tx.get(ref);
-      let next = 1;
-      if (doc.exists && doc.data().last) next = (parseInt(doc.data().last, 10) || 0) + 1;
-      tx.set(ref, { last: next }, { merge: true });
-      return next;
-    });
-    const invNo = 'YVP-INV' + String(num).padStart(4, '0');
-    document.getElementById('invNumber').value = invNo;
-    if (typeof saveInvoiceToTracker === 'function') { saveInvoiceToTracker(); }
-    showToast('Invoice number: ' + invNo);
-  } catch (e) {
-    console.error(e);
-    // fallback local sequential in localStorage
-    let n = parseInt(localStorage.getItem('yvp_inv_counter') || '0', 10) + 1;
-    localStorage.setItem('yvp_inv_counter', String(n));
-    const invNo = 'YVP-INV' + String(n).padStart(4, '0');
-    document.getElementById('invNumber').value = invNo;
-    if (typeof saveInvoiceToTracker === 'function') { saveInvoiceToTracker(); }
-    showToast('Invoice number: ' + invNo + ' (local)');
-  }
-}
-
-async function refreshInvoiceAgents() {
-  const dept = (document.getElementById('invDepartment') || {}).value || '';
-  const fromDate = (document.getElementById('invFrom') || {}).value || '';
-  const toDate = (document.getElementById('invTo') || {}).value || '';
-  const label = document.getElementById('invDeptLabel');
-  if (label) label.textContent = dept;
-  const tbody = document.getElementById('invAgentsTbody');
-  if (!tbody) return;
-
-  const emps = (cachedEmployees || []).filter(e => (e.department || '') === dept);
-  // hours from attendance
-  const aSnap = await getDb().collection('attendance').get();
-  const hoursMap = {};
-  aSnap.docs.forEach(d => {
-    const l = d.data();
-    if (!l.timeIn || !l.timeOut) return;
-    if (fromDate && l.date < fromDate) return;
-    if (toDate && l.date > toDate) return;
-    let hrs = parseFloat(l.totalHours) || 0;
-    if (hrs > 6) hrs = 6;
-    hoursMap[l.yvpId] = (hoursMap[l.yvpId] || 0) + hrs;
-  });
-
-  let totalDue = 0;
-  if (!emps.length) {
-    tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;color:#999">No employees in this department</td></tr>`;
-  } else {
-    tbody.innerHTML = emps.map(e => {
-      const name = [e.firstName, e.middleName, e.lastName].filter(Boolean).join(' ') || e.yvpId;
-      const hrs = Math.round((hoursMap[e.yvpId] || 0) * 100) / 100;
-      const rate = parseFloat(e.hourlyRate) || 0;
-      const total = hrs * rate;
-      totalDue += total;
-      return `<tr>
-        <td><input type="text" class="inv-edit-name" value="${name.replace(/"/g,'&quot;')}" style="width:100%;border:1px dashed #ccc;padding:4px 6px"/></td>
-        <td><input type="number" class="inv-edit-hrs" value="${hrs}" step="0.01" style="width:90px;border:1px dashed #ccc;padding:4px 6px" oninput="recalcInvoiceRow(this)"/></td>
-        <td><input type="number" class="inv-edit-rate" value="${Math.round(rate)}" step="1" style="width:90px;border:1px dashed #ccc;padding:4px 6px" oninput="recalcInvoiceRow(this)"/></td>
-        <td><input type="text" class="inv-edit-total" value="$${total.toFixed(2)}" style="width:100px;border:1px dashed #ccc;padding:4px 6px"/></td>
-      </tr>`;
-    }).join('');
-  }
-  const dueEl = document.getElementById('invTotalDue');
-  if (dueEl) {
-    if (dueEl.tagName === 'INPUT') dueEl.value = '$' + totalDue.toFixed(2);
-    else dueEl.textContent = '$' + totalDue.toFixed(2);
-  }
-  window._invoiceTotalDue = totalDue;
-  window._invoiceRows = emps.map(e => {
-    const name = [e.firstName, e.middleName, e.lastName].filter(Boolean).join(' ') || e.yvpId;
-    const hrs = Math.round((hoursMap[e.yvpId] || 0) * 100) / 100;
-    const rate = parseFloat(e.hourlyRate) || 0;
-    return { name, hrs, rate, total: hrs * rate };
-  });
-}
-
-function uploadInvoiceQr(event) {
-  const file = event.target.files[0];
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = function(e) {
-    const prev = document.getElementById('invQrPreview');
-    prev.innerHTML = '<img src="' + e.target.result + '" alt="QR" style="width:120px;height:160px;object-fit:cover;border:1px solid #ccc;border-radius:4px"/>';
-    window._invoiceQrDataUrl = e.target.result;
-  };
-  reader.readAsDataURL(file);
-}
-
-async function exportInvoiceExcel() {
-  if (typeof saveInvoiceToTracker === 'function') { try { await saveInvoiceToTracker(); } catch(e){} }
-
-  const dept = (document.getElementById('invDepartment') || {}).value || '';
-  const invNo = (document.getElementById('invNumber') || {}).value || '';
-  const client = (document.getElementById('invClientName') || {}).value || '';
-  const email = (document.getElementById('invClientEmail') || {}).value || '';
-  const fromDate = (document.getElementById('invFrom') || {}).value || '';
-  const toDate = (document.getElementById('invTo') || {}).value || '';
-  let rows = [];
-  document.querySelectorAll('#invAgentsTbody tr').forEach(tr => {
-    const name = tr.querySelector('.inv-edit-name')?.value || tr.cells[0]?.innerText || '';
-    const hrs = parseFloat(tr.querySelector('.inv-edit-hrs')?.value) || 0;
-    const rate = parseFloat(tr.querySelector('.inv-edit-rate')?.value) || 0;
-    const totalStr = (tr.querySelector('.inv-edit-total')?.value || '').replace(/[^0-9.\-]/g,'');
-    const total = parseFloat(totalStr) || (hrs * rate);
-    if (name) rows.push({ name, hrs, rate, total });
-  });
-  if (!rows.length) rows = window._invoiceRows || [];
-  const dueRaw = (document.getElementById('invTotalDue')?.value || document.getElementById('invTotalDue')?.textContent || '').replace(/[^0-9.\-]/g,'');
-  const totalDue = parseFloat(dueRaw) || window._invoiceTotalDue || 0;
-
-  const aoa = [
-    ['YVP Administrative Support Services'],
-    ['Phone: ' + ((document.getElementById('invPhone')||{}).value || ''), 'Email: ' + ((document.getElementById('invEmailFrom')||{}).value || '')],
-    [],
-    [(document.getElementById('invTitle')||{}).value || 'INVOICE'],
-    [],
-    ['NAME', client],
-    ['EMAIL', email],
-    ['Invoice No.', invNo],
-    ['Coverage From', fromDate, 'Coverage To', toDate],
-    ['Department', dept],
-    [],
-    ['Name', 'Hours Worked', 'Hourly Rate', 'Total'],
-    ...rows.map(r => [r.name, r.hrs, '$' + Math.round(r.rate), '$' + r.total.toFixed(2)]),
-    [],
-    ['TOTAL DUE', '', '', '$' + totalDue.toFixed(2)],
-    [],
-    ['Payment Instructions', (document.getElementById('invPayInstr')||{}).value || ''],
-    ['Bank Details', (document.getElementById('invBank')||{}).value || '']
-  ];
-  const ws = XLSX.utils.aoa_to_sheet(aoa);
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Invoice');
-  XLSX.writeFile(wb, (invNo || 'YVP_Invoice') + '.xlsx');
-  showToast('Invoice Excel downloaded');
-}
-
-
-
-
-function removeInvoiceQr() {
-  const prev = document.getElementById('invQrPreview');
-  if (prev) prev.innerHTML = '<span style="color:#999;font-size:13px">No QR code uploaded</span>';
-  window._invoiceQrDataUrl = null;
-  const f = document.getElementById('invQrFile');
-  if (f) f.value = '';
-  showToast('QR code removed');
-}
-
-function recalcInvoiceRow(el) {
-  try {
-    const tr = el.closest('tr');
-    if (!tr) return;
-    const hrs = parseFloat(tr.querySelector('.inv-edit-hrs')?.value) || 0;
-    const rate = parseFloat(tr.querySelector('.inv-edit-rate')?.value) || 0;
-    const total = hrs * rate;
-    const totEl = tr.querySelector('.inv-edit-total');
-    if (totEl) totEl.value = '$' + total.toFixed(2);
-    // sum all totals
-    let sum = 0;
-    document.querySelectorAll('#invAgentsTbody tr').forEach(row => {
-      const t = (row.querySelector('.inv-edit-total')?.value || '').replace(/[^0-9.\-]/g,'');
-      sum += parseFloat(t) || 0;
-    });
-    const dueEl = document.getElementById('invTotalDue');
-    if (dueEl) {
-      if (dueEl.tagName === 'INPUT') dueEl.value = '$' + sum.toFixed(2);
-      else dueEl.textContent = '$' + sum.toFixed(2);
-    }
-    window._invoiceTotalDue = sum;
-  } catch (e) { console.error(e); }
-}
-
-
-
-
-
-
-
-
-
-
-
-
-</script>
-<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js">
-// ── ATTENDANCE HISTORY ────────────────────────────────
-async function logAttendanceHistory(yvpId, name, transaction) {
-  try {
-    await getDb().collection('attendance_history').add({
-      yvpId: yvpId || '',
-      name: name || '',
-      transaction: transaction || '',
-      timestamp: firebase.firestore.FieldValue.serverTimestamp(),
-      timestampText: new Date().toLocaleString('en-US'),
-      byUser: (CU && (CU.username || CU.name)) || 'system'
-    });
-  } catch (e) {
-    console.error('History log failed', e);
-  }
-}
-
-async function loadHistory() {
-  const tbody = document.getElementById('historyTbody');
-  if (!tbody) return;
-  try {
-    const snap = await getDb().collection('attendance_history').orderBy('timestamp', 'desc').limit(500).get();
-    const rows = snap.docs.map(d => d.data());
-    tbody.innerHTML = rows.length ? rows.map(r => `
-      <tr>
-        <td>${r.yvpId || '—'}</td>
-        <td>${r.name || '—'}</td>
-        <td>${r.transaction || '—'}</td>
-        <td>${r.timestampText || (r.timestamp && r.timestamp.toDate ? r.timestamp.toDate().toLocaleString('en-US') : '—')}</td>
-      </tr>
-    `).join('') : `<tr><td colspan="4" style="text-align:center;color:#999">No history records</td></tr>`;
-  } catch (e) {
-    console.error(e);
-    // Fallback without orderBy if index missing
-    try {
-      const snap = await getDb().collection('attendance_history').limit(500).get();
-      const rows = snap.docs.map(d => d.data()).sort((a,b) => (b.timestampText||'').localeCompare(a.timestampText||''));
-      tbody.innerHTML = rows.length ? rows.map(r => `
-        <tr>
-          <td>${r.yvpId || '—'}</td>
-          <td>${r.name || '—'}</td>
-          <td>${r.transaction || '—'}</td>
-          <td>${r.timestampText || '—'}</td>
-        </tr>
-      `).join('') : `<tr><td colspan="4" style="text-align:center;color:#999">No history records</td></tr>`;
-    } catch (e2) {
-      tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;color:#c62828">Failed to load history</td></tr>`;
-    }
-  }
-}
-
-async function exportHistoryReport() {
-  try {
-    let rowsData = [];
-    try {
-      const snap = await getDb().collection('attendance_history').orderBy('timestamp', 'desc').limit(2000).get();
-      rowsData = snap.docs.map(d => d.data());
-    } catch (e) {
-      const snap = await getDb().collection('attendance_history').limit(2000).get();
-      rowsData = snap.docs.map(d => d.data());
-    }
-    const headers = ['YVP ID', 'Name', 'Transaction', 'Date & Time', 'By User'];
-    const rows = rowsData.map(r => [
-      r.yvpId || '',
-      r.name || '',
-      r.transaction || '',
-      r.timestampText || '',
-      r.byUser || ''
-    ]);
-    const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'History');
-    XLSX.writeFile(wb, 'YVP_Attendance_History_' + new Date().toISOString().slice(0,10) + '.xlsx');
-    showToast('History report downloaded');
-  } catch (e) {
-    console.error(e);
-    showToast('Failed to export history', 'error');
-  }
-}
-
-function editAttendanceFromReport(logId, yvpId, name, date, timeIn, timeOut) {
-  document.getElementById('editAttDocId').value = logId;
-  document.getElementById('editAttYvpId').value = yvpId || '';
-  document.getElementById('editAttDate').value = date || '';
-  document.getElementById('editAttName').value = name || yvpId || '';
-  document.getElementById('editAttDateDisplay').value = date || '';
-  document.getElementById('editAttTimeIn').value = (timeIn && timeIn !== '—') ? timeIn : '';
-  document.getElementById('editAttTimeOut').value = (timeOut && timeOut !== '—') ? timeOut : '';
-  document.getElementById('editAttModal').classList.add('active');
-}
-
-
-// ── DEPARTMENTS & INVOICE ─────────────────────────────
-const DEFAULT_DEPARTMENTS = ['Twinacre Ventures LLC', 'Vandelay Real Estate'];
-
-async function loadDepartmentList() {
-  let depts = DEFAULT_DEPARTMENTS.slice();
-  try {
-    const snap = await getDb().collection('departments').get();
-    snap.docs.forEach(d => {
-      const n = d.data().name;
-      if (n && depts.indexOf(n) === -1) depts.push(n);
-    });
-  } catch (e) {}
-  // also from employees
-  (cachedEmployees || []).forEach(e => {
-    if (e.department && depts.indexOf(e.department) === -1) depts.push(e.department);
-  });
-  return depts;
-}
-
-async function loadDepartmentsIntoInvoice() {
-  const depts = await loadDepartmentList();
-  const sel = document.getElementById('invDepartment');
-  const fDept = document.getElementById('fDepartment');
-  if (sel) {
-    const cur = sel.value;
-    sel.innerHTML = depts.map(d => `<option value="${d}">${d}</option>`).join('');
-    if (cur && depts.indexOf(cur) >= 0) sel.value = cur;
-  }
-  if (fDept) {
-    const cur = fDept.value;
-    fDept.innerHTML = '<option value="">— Select —</option>' + depts.map(d => `<option value="${d}">${d}</option>`).join('');
-    if (cur) fDept.value = cur;
-  }
-}
-
-function showAddDepartment() {
-  document.getElementById('newDeptName').value = '';
-  document.getElementById('addDeptModal').classList.add('active');
-}
-
-async function saveNewDepartment() {
-  const name = (document.getElementById('newDeptName').value || '').trim();
-  if (!name) { showToast('Enter department name', 'error'); return; }
-  try {
-    await getDb().collection('departments').doc(name.replace(/\//g,'_')).set({
-      name,
-      createdAt: firebase.firestore.FieldValue.serverTimestamp()
-    });
-    closeModal('addDeptModal');
-    await loadDepartmentsIntoInvoice();
-    const sel = document.getElementById('invDepartment');
-    if (sel) sel.value = name;
-    showToast('Department added');
-    refreshInvoiceAgents();
-  } catch (e) {
-    showToast('Failed to add department: ' + e.message, 'error');
-  }
-}
-
-async function generateInvoiceNumber() {
-  try {
-    const ref = getDb().collection('meta').doc('invoiceCounter');
-    const num = await getDb().runTransaction(async (tx) => {
-      const doc = await tx.get(ref);
-      let next = 1;
-      if (doc.exists && doc.data().last) next = (parseInt(doc.data().last, 10) || 0) + 1;
-      tx.set(ref, { last: next }, { merge: true });
-      return next;
-    });
-    const invNo = 'YVP-INV' + String(num).padStart(4, '0');
-    document.getElementById('invNumber').value = invNo;
-    if (typeof saveInvoiceToTracker === 'function') { saveInvoiceToTracker(); }
-    showToast('Invoice number: ' + invNo);
-  } catch (e) {
-    console.error(e);
-    // fallback local sequential in localStorage
-    let n = parseInt(localStorage.getItem('yvp_inv_counter') || '0', 10) + 1;
-    localStorage.setItem('yvp_inv_counter', String(n));
-    const invNo = 'YVP-INV' + String(n).padStart(4, '0');
-    document.getElementById('invNumber').value = invNo;
-    if (typeof saveInvoiceToTracker === 'function') { saveInvoiceToTracker(); }
-    showToast('Invoice number: ' + invNo + ' (local)');
-  }
-}
-
-async function refreshInvoiceAgents() {
-  const dept = (document.getElementById('invDepartment') || {}).value || '';
-  const fromDate = (document.getElementById('invFrom') || {}).value || '';
-  const toDate = (document.getElementById('invTo') || {}).value || '';
-  const label = document.getElementById('invDeptLabel');
-  if (label) label.textContent = dept;
-  const tbody = document.getElementById('invAgentsTbody');
-  if (!tbody) return;
-
-  const emps = (cachedEmployees || []).filter(e => (e.department || '') === dept);
-  // hours from attendance
-  const aSnap = await getDb().collection('attendance').get();
-  const hoursMap = {};
-  aSnap.docs.forEach(d => {
-    const l = d.data();
-    if (!l.timeIn || !l.timeOut) return;
-    if (fromDate && l.date < fromDate) return;
-    if (toDate && l.date > toDate) return;
-    let hrs = parseFloat(l.totalHours) || 0;
-    if (hrs > 6) hrs = 6;
-    hoursMap[l.yvpId] = (hoursMap[l.yvpId] || 0) + hrs;
-  });
-
-  let totalDue = 0;
-  if (!emps.length) {
-    tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;color:#999">No employees in this department</td></tr>`;
-  } else {
-    tbody.innerHTML = emps.map(e => {
-      const name = [e.firstName, e.middleName, e.lastName].filter(Boolean).join(' ') || e.yvpId;
-      const hrs = Math.round((hoursMap[e.yvpId] || 0) * 100) / 100;
-      const rate = parseFloat(e.hourlyRate) || 0;
-      const total = hrs * rate;
-      totalDue += total;
-      return `<tr>
-        <td><input type="text" class="inv-edit-name" value="${name.replace(/"/g,'&quot;')}" style="width:100%;border:1px dashed #ccc;padding:4px 6px"/></td>
-        <td><input type="number" class="inv-edit-hrs" value="${hrs}" step="0.01" style="width:90px;border:1px dashed #ccc;padding:4px 6px" oninput="recalcInvoiceRow(this)"/></td>
-        <td><input type="number" class="inv-edit-rate" value="${Math.round(rate)}" step="1" style="width:90px;border:1px dashed #ccc;padding:4px 6px" oninput="recalcInvoiceRow(this)"/></td>
-        <td><input type="text" class="inv-edit-total" value="$${total.toFixed(2)}" style="width:100px;border:1px dashed #ccc;padding:4px 6px"/></td>
-      </tr>`;
-    }).join('');
-  }
-  const dueEl = document.getElementById('invTotalDue');
-  if (dueEl) {
-    if (dueEl.tagName === 'INPUT') dueEl.value = '$' + totalDue.toFixed(2);
-    else dueEl.textContent = '$' + totalDue.toFixed(2);
-  }
-  window._invoiceTotalDue = totalDue;
-  window._invoiceRows = emps.map(e => {
-    const name = [e.firstName, e.middleName, e.lastName].filter(Boolean).join(' ') || e.yvpId;
-    const hrs = Math.round((hoursMap[e.yvpId] || 0) * 100) / 100;
-    const rate = parseFloat(e.hourlyRate) || 0;
-    return { name, hrs, rate, total: hrs * rate };
-  });
-}
-
-function uploadInvoiceQr(event) {
-  const file = event.target.files[0];
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = function(e) {
-    const prev = document.getElementById('invQrPreview');
-    prev.innerHTML = '<img src="' + e.target.result + '" alt="QR" style="width:120px;height:160px;object-fit:cover;border:1px solid #ccc;border-radius:4px"/>';
-    window._invoiceQrDataUrl = e.target.result;
-  };
-  reader.readAsDataURL(file);
-}
-
-async function exportInvoiceExcel() {
-  if (typeof saveInvoiceToTracker === 'function') { try { await saveInvoiceToTracker(); } catch(e){} }
-
-  const dept = (document.getElementById('invDepartment') || {}).value || '';
-  const invNo = (document.getElementById('invNumber') || {}).value || '';
-  const client = (document.getElementById('invClientName') || {}).value || '';
-  const email = (document.getElementById('invClientEmail') || {}).value || '';
-  const fromDate = (document.getElementById('invFrom') || {}).value || '';
-  const toDate = (document.getElementById('invTo') || {}).value || '';
-  let rows = [];
-  document.querySelectorAll('#invAgentsTbody tr').forEach(tr => {
-    const name = tr.querySelector('.inv-edit-name')?.value || tr.cells[0]?.innerText || '';
-    const hrs = parseFloat(tr.querySelector('.inv-edit-hrs')?.value) || 0;
-    const rate = parseFloat(tr.querySelector('.inv-edit-rate')?.value) || 0;
-    const totalStr = (tr.querySelector('.inv-edit-total')?.value || '').replace(/[^0-9.\-]/g,'');
-    const total = parseFloat(totalStr) || (hrs * rate);
-    if (name) rows.push({ name, hrs, rate, total });
-  });
-  if (!rows.length) rows = window._invoiceRows || [];
-  const dueRaw = (document.getElementById('invTotalDue')?.value || document.getElementById('invTotalDue')?.textContent || '').replace(/[^0-9.\-]/g,'');
-  const totalDue = parseFloat(dueRaw) || window._invoiceTotalDue || 0;
-
-  const aoa = [
-    ['YVP Administrative Support Services'],
-    ['Phone: ' + ((document.getElementById('invPhone')||{}).value || ''), 'Email: ' + ((document.getElementById('invEmailFrom')||{}).value || '')],
-    [],
-    [(document.getElementById('invTitle')||{}).value || 'INVOICE'],
-    [],
-    ['NAME', client],
-    ['EMAIL', email],
-    ['Invoice No.', invNo],
-    ['Coverage From', fromDate, 'Coverage To', toDate],
-    ['Department', dept],
-    [],
-    ['Name', 'Hours Worked', 'Hourly Rate', 'Total'],
-    ...rows.map(r => [r.name, r.hrs, '$' + Math.round(r.rate), '$' + r.total.toFixed(2)]),
-    [],
-    ['TOTAL DUE', '', '', '$' + totalDue.toFixed(2)],
-    [],
-    ['Payment Instructions', (document.getElementById('invPayInstr')||{}).value || ''],
-    ['Bank Details', (document.getElementById('invBank')||{}).value || '']
-  ];
-  const ws = XLSX.utils.aoa_to_sheet(aoa);
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Invoice');
-  XLSX.writeFile(wb, (invNo || 'YVP_Invoice') + '.xlsx');
-  showToast('Invoice Excel downloaded');
-}
-
-
-
-
-function removeInvoiceQr() {
-  const prev = document.getElementById('invQrPreview');
-  if (prev) prev.innerHTML = '<span style="color:#999;font-size:13px">No QR code uploaded</span>';
-  window._invoiceQrDataUrl = null;
-  const f = document.getElementById('invQrFile');
-  if (f) f.value = '';
-  showToast('QR code removed');
-}
-
-function recalcInvoiceRow(el) {
-  try {
-    const tr = el.closest('tr');
-    if (!tr) return;
-    const hrs = parseFloat(tr.querySelector('.inv-edit-hrs')?.value) || 0;
-    const rate = parseFloat(tr.querySelector('.inv-edit-rate')?.value) || 0;
-    const total = hrs * rate;
-    const totEl = tr.querySelector('.inv-edit-total');
-    if (totEl) totEl.value = '$' + total.toFixed(2);
-    // sum all totals
-    let sum = 0;
-    document.querySelectorAll('#invAgentsTbody tr').forEach(row => {
-      const t = (row.querySelector('.inv-edit-total')?.value || '').replace(/[^0-9.\-]/g,'');
-      sum += parseFloat(t) || 0;
-    });
-    const dueEl = document.getElementById('invTotalDue');
-    if (dueEl) {
-      if (dueEl.tagName === 'INPUT') dueEl.value = '$' + sum.toFixed(2);
-      else dueEl.textContent = '$' + sum.toFixed(2);
-    }
-    window._invoiceTotalDue = sum;
-  } catch (e) { console.error(e); }
-}
-
-
-
-
-
-
-
-
-
-
-
-
-</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:'Segoe UI',sans-serif;background:linear-gradient(135deg,#1a237e,#1565c0);min-height:100vh;color:#333}
@@ -1481,9 +91,24 @@ tbody td{padding:10px 12px;border-bottom:1px solid #eee}
 .upload-zone{border:2px dashed #9fa8da;border-radius:10px;padding:30px 20px;text-align:center;cursor:pointer;background:#f8f9ff;margin-bottom:14px}
 .filter-row{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-bottom:16px}
 .filter-row .form-group{margin-bottom:0;min-width:140px}
+
+/* Employee accordion */
+.emp-acc-row td{vertical-align:middle}
+.emp-acc-panel{display:none;background:#f7f9fc;border-top:1px solid #e0e6ef}
+.emp-acc-panel.open{display:table-row}
+.emp-acc-panel td{padding:16px 18px !important}
+.emp-acc-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px 20px;font-size:13px}
+.emp-acc-grid b{display:block;color:#1a237e;font-size:11px;text-transform:uppercase;letter-spacing:.4px;margin-bottom:2px}
+.emp-acc-actions{margin-top:14px;display:flex;gap:8px;flex-wrap:wrap}
+.emp-acc-toggle.active{background:#455a64 !important}
+@media (max-width:700px){
+  .emp-acc-grid{grid-template-columns:1fr !important}
+}
+
 </style>
 </head>
 <body>
+
 <div id="liveClock">⏰ --:--:--</div>
 <div id="toast"></div>
 
@@ -1636,6 +261,35 @@ tbody td{padding:10px 12px;border-bottom:1px solid #eee}
 </div>
 
 <!-- LOGIN -->
+
+<div class="modal-overlay" id="empInfoModal">
+  <div class="modal-box" style="max-width:560px;text-align:left">
+    <button class="modal-close" onclick="closeEmpInfo()">✕</button>
+    <h3 style="color:#1a237e;margin-bottom:14px">👤 Employee Info</h3>
+    <input type="hidden" id="infoEmpYvpId"/>
+    <input type="hidden" id="infoEmpName"/>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px 16px;font-size:14px">
+      <div><b>YVP ID</b><div id="infoYvpId">—</div></div>
+      <div><b>Full Name</b><div id="infoFullName">—</div></div>
+      <div><b>Last Name</b><div id="infoLast">—</div></div>
+      <div><b>First Name</b><div id="infoFirst">—</div></div>
+      <div><b>Middle Name</b><div id="infoMid">—</div></div>
+      <div><b>Position</b><div id="infoPos">—</div></div>
+      <div><b>Department</b><div id="infoDept">—</div></div>
+      <div><b>Hourly Rate</b><div id="infoRate">—</div></div>
+      <div><b>Birthday</b><div id="infoBday">—</div></div>
+      <div><b>Email</b><div id="infoEmail">—</div></div>
+      <div style="grid-column:1/-1"><b>Address</b><div id="infoAddr">—</div></div>
+      <div><b>Contact</b><div id="infoContact">—</div></div>
+    </div>
+    <div style="margin-top:20px;display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end">
+      <button class="btn btn-warning" type="button" onclick="showResetPasswordForEmployee(document.getElementById('infoEmpYvpId').value, document.getElementById('infoEmpName').value)">Reset Password</button>
+      <button class="btn btn-danger" type="button" onclick="deleteEmployee(document.getElementById('infoEmpYvpId').value); closeEmpInfo();">Delete</button>
+      <button class="btn btn-secondary" type="button" onclick="closeEmpInfo()">Close</button>
+    </div>
+  </div>
+</div>
+
 <div id="loginScreen">
   <div class="login-card">
     <div class="login-logo">🏢</div>
@@ -1745,9 +399,10 @@ tbody td{padding:10px 12px;border-bottom:1px solid #eee}
         <div class="table-wrapper">
           <table>
             <thead><tr>
-              <th>YVP ID</th><th>Full Name</th><th>Last Name</th><th>First Name</th><th>Middle Name</th>
-              <th>Position</th><th>Department</th><th>Hourly Rate</th><th>Birthday</th><th>Address</th>
-              <th>Email</th><th>Contact</th><th>Actions</th>
+              <th>YVP ID</th>
+              <th>Full Name</th>
+              <th>Position</th>
+              <th>Actions</th>
             </tr></thead>
             <tbody id="empTbody"></tbody>
           </table>
@@ -1838,6 +493,7 @@ tbody td{padding:10px 12px;border-bottom:1px solid #eee}
           <h3 style="margin:0;border:none;padding:0">📋 Attendance Report</h3>
           <div style="display:flex;gap:10px">
             <button class="btn btn-success" onclick="exportAttendanceReport()">⬇️ Download Excel</button>
+            <input type="text" id="rptSearch" placeholder="Filter YVP ID or Name..." oninput="filterAttendanceReport()" style="margin-left:10px;padding:8px 12px;border:1px solid #ccc;border-radius:8px;min-width:200px"/>
             <button class="btn btn-secondary" onclick="loadReports()">🔄 Refresh</button>
           </div>
         </div>
@@ -2088,6 +744,7 @@ Bank Name: Wise Pilipinas Inc.</textarea>
 </div>
 
 <script>
+
 // ── FIREBASE INIT ─────────────────────────────────────
 // For Firebase JS SDK v7.20.0 and later, measurementId is optional
 const firebaseConfig = {
@@ -2657,48 +1314,7 @@ async function deleteLog(id) {
 }
 
 // ── EMPLOYEES MANAGEMENT ──────────────────────────────
-async function loadEmployees() {
-  const snap = await db.collection('employees').orderBy('yvpId').get();
-  let emps = snap.docs.map(d => d.data());
-  const q = (document.getElementById('empSearch')?.value || '').toLowerCase();
-  if (q) {
-    emps = emps.filter(e =>
-      (e.yvpId||'').toLowerCase().includes(q) ||
-      (e.lastName||'').toLowerCase().includes(q) ||
-      (e.firstName||'').toLowerCase().includes(q) ||
-      (e.position||'').toLowerCase().includes(q)
-    );
-  }
-  const tbody = document.getElementById('empTbody');
-  if (!emps.length) {
-    tbody.innerHTML = `<tr><td colspan="12" style="text-align:center;color:#999">No employees found</td></tr>`;
-    return;
-  }
-  tbody.innerHTML = emps.map(e => {
-    const fullName = [e.lastName, e.firstName, e.middleName].filter(Boolean).join(', ').replace(/, ([^,]+)$/, ', $1');
-    const fullNameDisplay = [e.lastName, e.firstName, e.middleName].filter(Boolean).join(' ');
-    return `<tr>
-      <td>${e.yvpId||''}</td>
-      <td><b>${fullNameDisplay||'—'}</b></td>
-      <td>${e.lastName||''}</td>
-      <td>${e.firstName||''}</td>
-      <td>${e.middleName||''}</td>
-      <td>${e.position||''}</td>
-      <td>${e.department||''}</td>
-      <td>${e.hourlyRate ? '$'+parseFloat(e.hourlyRate).toFixed(2) : '—'}</td>
-      <td>${e.birthday||''}</td>
-      <td>${e.address||''}</td>
-      <td>${e.email||''}</td>
-      <td>${e.contact||''}</td>
-      <td style="white-space:nowrap">
-        <button class="btn btn-primary btn-sm" onclick="editEmp('${e.yvpId}')">Edit</button>
-        <button class="btn btn-success btn-sm" onclick="createLoginForEmployee('${e.yvpId}')">Create Login</button>
-        <button class="btn btn-warning btn-sm" onclick="showResetPasswordForEmployee('${e.yvpId}', '${fullNameDisplay}');">Reset Password</button>
-        <button class="btn btn-danger btn-sm" onclick="deleteEmployee('${e.yvpId}')">Delete</button>
-      </td>
-    </tr>`;
-  }).join('');
-}
+
 
 function showEmpForm() {
   document.getElementById('empForm').style.display = 'block';
@@ -3448,69 +2064,10 @@ initSessionUI = function() {
 };
 
 
-async function deleteEmployee(yvpId) {
-  if (!confirm(`Delete employee ${yvpId}? This cannot be undone.`)) return;
-  try {
-    await db.collection('employees').doc(yvpId).delete();
-    showToast('Employee deleted');
-    loadEmployees();
-    preloadGlobalData();
-  } catch (e) {
-    console.error(e);
-    showToast('Failed to delete employee', 'error');
-  }
-}
 
 
-async function createLoginForEmployee(yvpId) {
-  if (!yvpId) return;
-  const empDoc = await db.collection('employees').doc(yvpId).get();
-  if (!empDoc.exists) {
-    showToast('Employee not found', 'error');
-    return;
-  }
-  const emp = empDoc.data();
-  const username = yvpId.toLowerCase().replace(/\s+/g, '');
-  const password = yvpId;
-  const fullName = `${emp.firstName || ''} ${emp.lastName || ''}`.trim();
-  const email = `${username}@yvp-timekeeping.internal`;
 
-  // Check if already exists
-  const existing = await db.collection('users').where('username', '==', username).get();
-  if (!existing.empty) {
-    showToast('This employee already has a login account', 'error');
-    return;
-  }
 
-  try {
-    const cred = await auth.createUserWithEmailAndPassword(email, password);
-    await db.collection('users').doc(cred.user.uid).set({
-      username,
-      name: fullName,
-      role: 'rank_file',
-      yvpId: emp.yvpId,
-      email,
-      createdAt: firebase.firestore.FieldValue.serverTimestamp()
-    });
-    showToast(`Login created for ${fullName}. Username: ${username} | Password: ${password}`);
-  } catch (e) {
-    console.error(e);
-    if (e.code === 'auth/email-already-in-use') {
-      // Auth exists but maybe no Firestore profile
-      await db.collection('users').add({
-        username,
-        name: fullName,
-        role: 'rank_file',
-        yvpId: emp.yvpId,
-        email,
-        createdAt: firebase.firestore.FieldValue.serverTimestamp()
-      });
-      showToast(`Login profile created. Username: ${username} | Password: ${password}`);
-    } else {
-      showToast('Failed to create login: ' + e.message, 'error');
-    }
-  }
-}
 
 
 // ── EDIT USER ACCESS ──────────────────────────────────
@@ -3541,7 +2098,7 @@ async function saveUserAccess() {
 }
 
 async function deleteUserAccount(uid, username) {
-  if (username === 'admin') { showToast('Cannot delete main admin account', 'error'); return; }
+  if (username === 'admin' || String(username||'').toLowerCase() === 'admin') { showToast('Cannot delete main admin account', 'error'); return; }
   if (!confirm('Delete user account "' + username + '"?')) return;
   try {
     await db.collection('users').doc(uid).delete();
@@ -3809,14 +2366,20 @@ async function loadUsers() {
       <td><span class="badge ${badge}">${roleLabel}</span></td>
       <td>${u.yvpId || '—'}</td>
       <td style="white-space:nowrap">
-        <button class="btn btn-primary btn-sm" onclick="editUserAccess('${u.id}','${uname}','${role}')">Edit Access</button>
-        <button class="btn btn-danger btn-sm" onclick="deleteUserAccount('${u.id}','${uname}')">Delete</button>
+        ${ (uname === 'admin' || u.username === 'admin' || (u.yvpId && String(u.yvpId).toUpperCase() === 'ADMIN') || (u.role === 'manager' && (u.name === 'Administrator' || uname === 'admin')))
+          ? '<span style="color:#999;font-size:12px">System Administrator (protected)</span>'
+          : `<button class="btn btn-primary btn-sm" onclick="editUserAccess('${u.id}','${uname}','${role}')">Edit Access</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteUserAccount('${u.id}','${uname}')">Delete</button>` }
       </td>
     </tr>`;
   }).join('') : `<tr><td colspan="5" style="text-align:center;color:#999">No users found</td></tr>`;
 }
 
 function editUserAccess(uid, username, currentRole) {
+  if (String(username||'').toLowerCase() === 'admin') {
+    showToast('Cannot edit the System Administrator account', 'error');
+    return;
+  }
   if (!uid) { showToast('User not found', 'error'); return; }
   document.getElementById('editAccessUid').value = uid;
   document.getElementById('editAccessUsername').value = username || '';
@@ -3830,8 +2393,8 @@ async function saveUserAccess() {
   const username = document.getElementById('editAccessUsername').value;
 
   if (!uid) { showToast('User not found', 'error'); return; }
-  if (username === 'admin' && newRole !== 'manager') {
-    showToast('Main admin must remain Manager', 'error');
+  if (String(username||'').toLowerCase() === 'admin') {
+    showToast('Cannot edit the System Administrator account', 'error');
     return;
   }
 
@@ -4609,83 +3172,7 @@ function applyInvoiceDefaultsByDepartment(dept) {
   }
 }
 
-async function exportInvoicePdf() {
-  try {
-    if (typeof saveInvoiceToTracker === 'function') await saveInvoiceToTracker();
 
-    if (typeof escapeHtml !== 'function') {
-      window.escapeHtml = function(s) {
-        return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-      };
-    }
-
-    const g = (id) => document.getElementById(id);
-    const phone = (g('invPhone') || {}).value || '';
-    const emailFrom = (g('invEmailFrom') || {}).value || '';
-    const title = (g('invTitle') || {}).value || 'INVOICE';
-    const clientName = (g('invClientName') || {}).value || '';
-    const clientEmail = (g('invClientEmail') || {}).value || '';
-    const invNo = (g('invNumber') || {}).value || '';
-    const fromDate = (g('invFrom') || {}).value || '';
-    const toDate = (g('invTo') || {}).value || '';
-    const dept = (g('invDepartment') || {}).value || '';
-    const payInstr = (g('invPayInstr') || {}).value || '';
-    const bank = (g('invBank') || {}).value || '';
-    const totalDueEl = g('invTotalDue');
-    const totalDue = totalDueEl ? (totalDueEl.value || totalDueEl.textContent || '$0.00') : '$0.00';
-    let agentRows = '';
-    document.querySelectorAll('#invAgentsTbody tr').forEach(tr => {
-      if (!tr.querySelector('.inv-edit-name')) return;
-      const name = tr.querySelector('.inv-edit-name').value || '';
-      const hrs = (tr.querySelector('.inv-edit-hrs') || {}).value || '';
-      const rate = (tr.querySelector('.inv-edit-rate') || {}).value || '';
-      const total = (tr.querySelector('.inv-edit-total') || {}).value || '';
-      agentRows += '<tr><td>' + escapeHtml(name) + '</td><td>' + escapeHtml(hrs) + '</td><td>$' + escapeHtml(String(rate).replace(/^\$/,'')) + '</td><td>' + escapeHtml(total) + '</td></tr>';
-    });
-    if (!agentRows) agentRows = '<tr><td colspan="4" style="text-align:center;color:#999">No agents</td></tr>';
-    const qr = window._invoiceQrDataUrl
-      ? '<img src="' + window._invoiceQrDataUrl + '" style="width:120px;height:160px;object-fit:cover;border:1px solid #ccc"/>'
-      : '<span style="color:#999">No QR uploaded</span>';
-    const htmlDoc = '<!DOCTYPE html><html><head><meta charset="UTF-8"/><title>' + escapeHtml(invNo || 'Invoice') + '</title><style>'
-      + 'body{font-family:Segoe UI,Arial,sans-serif;color:#222;padding:28px;max-width:800px;margin:0 auto}'
-      + 'h1{color:#1a237e;text-align:center;margin:0 0 6px;font-size:20px}'
-      + '.sub{text-align:center;color:#555;font-size:12px;margin-bottom:12px}'
-      + 'hr{border:none;border-top:2px solid #1a237e;margin:12px 0}'
-      + '.title{text-align:center;font-size:26px;font-weight:800;color:#1a237e;letter-spacing:2px;margin:10px 0 16px}'
-      + '.label{font-weight:700;color:#1a237e;margin-top:12px}'
-      + '.billto{font-weight:800;color:#1a237e;margin:10px 0 4px}'
-      + 'table{width:100%;border-collapse:collapse;margin-top:10px}'
-      + 'th,td{border:1px solid #ccc;padding:8px;text-align:left;font-size:13px}'
-      + 'th{background:#1a237e;color:#fff}'
-      + '.total{text-align:right;font-weight:800;color:#1a237e}'
-      + '.pre{white-space:pre-wrap;font-size:13px;margin-top:4px}'
-      + '.scan{text-align:center;margin-top:18px}'
-      + '</style></head><body>'
-      + '<h1>YVP Administrative Support Services</h1>'
-      + '<div class="sub">Phone: ' + escapeHtml(phone) + ' | Email: ' + escapeHtml(emailFrom) + '</div><hr/>'
-      + '<div class="title">' + escapeHtml(title) + '</div>'
-      + '<div class="billto">BILL TO:</div>'
-      + '<div><b>NAME:</b> ' + escapeHtml(clientName) + '</div>'
-      + '<div><b>EMAIL:</b> ' + escapeHtml(clientEmail) + '</div>'
-      + '<div class="label">INVOICE DETAILS</div>'
-      + '<div><b>Invoice No:</b> ' + escapeHtml(invNo) + '</div>'
-      + '<div><b>Coverage From:</b> ' + escapeHtml(fromDate) + ' &nbsp; <b>To:</b> ' + escapeHtml(toDate) + '</div>'
-      + '<div class="label">Real Estate VAs — ' + escapeHtml(dept) + '</div>'
-      + '<table><thead><tr><th>Name</th><th>Hours Worked</th><th>Hourly Rate</th><th>Total</th></tr></thead><tbody>' + agentRows
-      + '</tbody><tfoot><tr><td colspan="3" class="total">TOTAL DUE</td><td class="total">' + escapeHtml(totalDue) + '</td></tr></tfoot></table>'
-      + '<div class="label">Payment Instructions</div><div class="pre">' + escapeHtml(payInstr) + '</div>'
-      + '<div class="label">Bank Details</div><div class="pre">' + escapeHtml(bank) + '</div>'
-      + '<div class="scan"><div class="label">SCAN TO PAY</div>' + qr + '</div></body></html>';
-    const w = window.open('', '_blank');
-    if (!w) { showToast('Please allow pop-ups to export PDF', 'error'); return; }
-    w.document.open(); w.document.write(htmlDoc); w.document.close();
-    setTimeout(function(){ w.focus(); w.print(); }, 400);
-    showToast('Use Print dialog → Save as PDF');
-  } catch (e) {
-    console.error(e);
-    showToast('PDF export failed: ' + e.message, 'error');
-  }
-}
 
 
 function escapeHtml(s) {
@@ -4887,6 +3374,370 @@ async function saveInvoiceTrackerRow(invoiceNo, btn) {
     console.error(e);
     showToast('Failed to save: ' + e.message, 'error');
   }
+}
+
+
+function isSystemAdminUser(u) {
+  if (!u) return false;
+  const uname = String(u.username || u || '').toLowerCase();
+  const yvp = String(u.yvpId || '').toUpperCase();
+  const name = String(u.name || '').toLowerCase();
+  return uname === 'admin' || yvp === 'ADMIN' || name === 'administrator';
+}
+
+
+
+
+
+
+function closeEmpInfo() {
+  closeModal('empInfoModal');
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+function exportInvoicePdf() {
+  try {
+    if (typeof escapeHtml !== 'function') {
+      window.escapeHtml = function(s) {
+        return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+      };
+    }
+    const g = function(id){ return document.getElementById(id); };
+    const phone = (g('invPhone') || {}).value || '';
+    const emailFrom = (g('invEmailFrom') || {}).value || '';
+    const title = (g('invTitle') || {}).value || 'INVOICE';
+    const clientName = (g('invClientName') || {}).value || '';
+    const clientEmail = (g('invClientEmail') || {}).value || '';
+    const invNo = (g('invNumber') || {}).value || '';
+    const fromDate = (g('invFrom') || {}).value || '';
+    const toDate = (g('invTo') || {}).value || '';
+    const dept = (g('invDepartment') || {}).value || '';
+    const payInstr = (g('invPayInstr') || {}).value || '';
+    const bank = (g('invBank') || {}).value || '';
+    const totalDueEl = g('invTotalDue');
+    const totalDue = totalDueEl ? (totalDueEl.value || totalDueEl.textContent || '$0.00') : '$0.00';
+    if (typeof saveInvoiceToTracker === 'function') {
+      try { saveInvoiceToTracker(); } catch (e0) {}
+    }
+    var agentRows = '';
+    document.querySelectorAll('#invAgentsTbody tr').forEach(function(tr) {
+      if (!tr.querySelector('.inv-edit-name')) return;
+      var name = tr.querySelector('.inv-edit-name').value || '';
+      var hrs = (tr.querySelector('.inv-edit-hrs') || {}).value || '';
+      var rate = (tr.querySelector('.inv-edit-rate') || {}).value || '';
+      var total = (tr.querySelector('.inv-edit-total') || {}).value || '';
+      agentRows += '<tr><td>' + escapeHtml(name) + '</td><td>' + escapeHtml(hrs) + '</td><td>$' + escapeHtml(String(rate).replace(/^\$/,'')) + '</td><td>' + escapeHtml(total) + '</td></tr>';
+    });
+    if (!agentRows) agentRows = '<tr><td colspan="4" style="text-align:center;color:#999">No agents</td></tr>';
+    var qr = window._invoiceQrDataUrl
+      ? '<img src="' + window._invoiceQrDataUrl + '" style="width:120px;height:160px;object-fit:cover;border:1px solid #ccc"/>'
+      : '<span style="color:#999">No QR uploaded</span>';
+    var htmlDoc = '<!DOCTYPE html><html><head><meta charset="UTF-8"/><title>' + escapeHtml(invNo || 'Invoice') + '</title><style>'
+      + 'body{font-family:Segoe UI,Arial,sans-serif;color:#222;padding:28px;max-width:800px;margin:0 auto}'
+      + 'h1{color:#1a237e;text-align:center;margin:0 0 6px;font-size:20px}'
+      + '.sub{text-align:center;color:#555;font-size:12px;margin-bottom:12px}'
+      + 'hr{border:none;border-top:2px solid #1a237e;margin:12px 0}'
+      + '.title{text-align:center;font-size:26px;font-weight:800;color:#1a237e;letter-spacing:2px;margin:10px 0 16px}'
+      + '.label{font-weight:700;color:#1a237e;margin-top:12px}'
+      + '.billto{font-weight:800;color:#1a237e;margin:10px 0 4px}'
+      + 'table{width:100%;border-collapse:collapse;margin-top:10px}'
+      + 'th,td{border:1px solid #ccc;padding:8px;text-align:left;font-size:13px}'
+      + 'th{background:#1a237e;color:#fff}'
+      + '.total{text-align:right;font-weight:800;color:#1a237e}'
+      + '.pre{white-space:pre-wrap;font-size:13px;margin-top:4px}'
+      + '.scan{text-align:center;margin-top:18px}'
+      + '</style></head><body>'
+      + '<h1>YVP Administrative Support Services</h1>'
+      + '<div class="sub">Phone: ' + escapeHtml(phone) + ' | Email: ' + escapeHtml(emailFrom) + '</div><hr/>'
+      + '<div class="title">' + escapeHtml(title) + '</div>'
+      + '<div class="billto">BILL TO:</div>'
+      + '<div><b>NAME:</b> ' + escapeHtml(clientName) + '</div>'
+      + '<div><b>EMAIL:</b> ' + escapeHtml(clientEmail) + '</div>'
+      + '<div class="label">INVOICE DETAILS</div>'
+      + '<div><b>Invoice No:</b> ' + escapeHtml(invNo) + '</div>'
+      + '<div><b>Coverage From:</b> ' + escapeHtml(fromDate) + ' &nbsp; <b>To:</b> ' + escapeHtml(toDate) + '</div>'
+      + '<div class="label">Real Estate VAs — ' + escapeHtml(dept) + '</div>'
+      + '<table><thead><tr><th>Name</th><th>Hours Worked</th><th>Hourly Rate</th><th>Total</th></tr></thead><tbody>' + agentRows
+      + '</tbody><tfoot><tr><td colspan="3" class="total">TOTAL DUE</td><td class="total">' + escapeHtml(totalDue) + '</td></tr></tfoot></table>'
+      + '<div class="label">Payment Instructions</div><div class="pre">' + escapeHtml(payInstr) + '</div>'
+      + '<div class="label">Bank Details</div><div class="pre">' + escapeHtml(bank) + '</div>'
+      + '<div class="scan"><div class="label">SCAN TO PAY</div>' + qr + '</div></body></html>';
+    var w = window.open('', '_blank');
+    if (!w) { showToast('Please allow pop-ups to export PDF', 'error'); return; }
+    w.document.open(); w.document.write(htmlDoc); w.document.close();
+    setTimeout(function(){ w.focus(); w.print(); }, 400);
+    showToast('Use Print dialog → Save as PDF');
+  } catch (e) {
+    console.error(e);
+    showToast('PDF export failed: ' + e.message, 'error');
+  }
+}
+
+
+async function loadEmployees() {
+  const _db = (typeof getDb === 'function') ? getDb() : db;
+  const snap = await _db.collection('employees').orderBy('yvpId').get();
+  let emps = snap.docs.map(function(d){ return Object.assign({ id: d.id }, d.data()); });
+  cachedEmployees = emps;
+  const searchEl = document.getElementById('empSearch');
+  const q = (searchEl && searchEl.value || '').toLowerCase();
+  if (q) {
+    emps = emps.filter(function(e) {
+      return (e.yvpId||'').toLowerCase().indexOf(q) >= 0
+        || (e.lastName||'').toLowerCase().indexOf(q) >= 0
+        || (e.firstName||'').toLowerCase().indexOf(q) >= 0
+        || (e.middleName||'').toLowerCase().indexOf(q) >= 0
+        || (e.position||'').toLowerCase().indexOf(q) >= 0
+        || (e.department||'').toLowerCase().indexOf(q) >= 0
+        || (e.email||'').toLowerCase().indexOf(q) >= 0;
+    });
+  }
+  const tbody = document.getElementById('empTbody');
+  if (!tbody) return;
+  if (!emps.length) {
+    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#999">No employees found</td></tr>';
+    return;
+  }
+  tbody.innerHTML = emps.map(function(e) {
+    const fullNameDisplay = [e.firstName, e.middleName, e.lastName].filter(Boolean).join(' ') || '—';
+    const safeYvp = String(e.yvpId || '').replace(/'/g, "\\'");
+    const safeName = fullNameDisplay.replace(/'/g, "\\'");
+    const rate = (e.hourlyRate != null && e.hourlyRate !== '') ? ('$' + parseFloat(e.hourlyRate).toFixed(2)) : '—';
+    var html = '';
+    // Compact list row
+    html += '<tr class="emp-acc-row" id="emp-row-' + safeYvp + '">';
+    html += '<td>' + (e.yvpId || '') + '</td>';
+    html += '<td><b>' + fullNameDisplay + '</b></td>';
+    html += '<td>' + (e.position || '—') + '</td>';
+    html += '<td style="min-width:210px"><div style="display:flex;flex-wrap:wrap;gap:4px">';
+    html += '<button class="btn btn-primary btn-sm" onclick="editEmp(\'' + safeYvp + '\')">Edit</button>';
+    html += '<button class="btn btn-success btn-sm" onclick="createLoginForEmployee(\'' + safeYvp + '\')">Create Login</button>';
+    html += '<button class="btn btn-secondary btn-sm emp-acc-toggle" id="emp-btn-' + safeYvp + '" onclick="toggleEmployeeAccordion(\'' + safeYvp + '\')">Employee Info ▾</button>';
+    html += '</div></td></tr>';
+    // Accordion details (hidden by default)
+    html += '<tr class="emp-acc-panel" id="emp-panel-' + safeYvp + '"><td colspan="4">';
+    html += '<div class="emp-acc-grid">';
+    html += '<div><b>YVP ID</b><span>' + (e.yvpId || '—') + '</span></div>';
+    html += '<div><b>Full Name</b><span>' + fullNameDisplay + '</span></div>';
+    html += '<div><b>Last Name</b><span>' + (e.lastName || '—') + '</span></div>';
+    html += '<div><b>First Name</b><span>' + (e.firstName || '—') + '</span></div>';
+    html += '<div><b>Middle Name</b><span>' + (e.middleName || '—') + '</span></div>';
+    html += '<div><b>Position</b><span>' + (e.position || '—') + '</span></div>';
+    html += '<div><b>Department</b><span>' + (e.department || '—') + '</span></div>';
+    html += '<div><b>Hourly Rate</b><span>' + rate + '</span></div>';
+    html += '<div><b>Birthday</b><span>' + (e.birthday || '—') + '</span></div>';
+    html += '<div><b>Email</b><span>' + (e.email || '—') + '</span></div>';
+    html += '<div><b>Contact</b><span>' + (e.contact || '—') + '</span></div>';
+    html += '<div style="grid-column:1/-1"><b>Address</b><span>' + (e.address || '—') + '</span></div>';
+    html += '</div>';
+    html += '<div class="emp-acc-actions">';
+    html += '<button class="btn btn-warning btn-sm" onclick="showResetPasswordForEmployee(\'' + safeYvp + '\', \'' + safeName + '\')">Reset Password</button> ';
+    html += '<button class="btn btn-danger btn-sm" onclick="deleteEmployee(\'' + safeYvp + '\')">Delete</button> ';
+    html += '<button class="btn btn-secondary btn-sm" onclick="toggleEmployeeAccordion(\'' + safeYvp + '\')">Close</button>';
+    html += '</div></td></tr>';
+    return html;
+  }).join('');
+}
+
+function toggleEmployeeAccordion(yvpId) {
+  const panel = document.getElementById('emp-panel-' + yvpId);
+  const btn = document.getElementById('emp-btn-' + yvpId);
+  if (!panel) return;
+  const isOpen = panel.classList.contains('open');
+  // Close all panels first — only one open at a time
+  document.querySelectorAll('.emp-acc-panel.open').forEach(function(p){ p.classList.remove('open'); });
+  document.querySelectorAll('.emp-acc-toggle.active').forEach(function(b){
+    b.classList.remove('active');
+    b.textContent = 'Employee Info ▾';
+  });
+  if (!isOpen) {
+    panel.classList.add('open');
+    if (btn) {
+      btn.classList.add('active');
+      btn.textContent = 'Employee Info ▴';
+    }
+  }
+}
+
+function showEmployeeInfo(yvpId) {
+  toggleEmployeeAccordion(yvpId);
+}
+
+
+async function createLoginForEmployee(yvpId) {
+  if (!yvpId) return;
+  const _db = (typeof getDb === 'function') ? getDb() : db;
+  const _auth = (typeof getAuth === 'function') ? getAuth() : auth;
+
+  let emp = null;
+  try {
+    const empDoc = await _db.collection('employees').doc(yvpId).get();
+    if (empDoc.exists) emp = empDoc.data();
+    if (!emp) {
+      const q = await _db.collection('employees').where('yvpId', '==', yvpId).get();
+      if (!q.empty) emp = q.docs[0].data();
+    }
+  } catch (e) { console.error(e); }
+  if (!emp) {
+    showToast('Employee not found', 'error');
+    return;
+  }
+
+  const username = String(yvpId).toLowerCase().replace(/\s+/g, '');
+  const password = yvpId; // default password = exact YVP ID
+  const fullName = [emp.firstName, emp.lastName].filter(Boolean).join(' ').trim()
+    || [emp.firstName, emp.middleName, emp.lastName].filter(Boolean).join(' ').trim()
+    || yvpId;
+  const email = username + '@yvp-timekeeping.internal';
+
+  // Existing Firestore user profile?
+  let existingSnap = await _db.collection('users').where('username', '==', username).get();
+
+  // If profile exists, re-link to this employee and set pending default password
+  if (!existingSnap.empty) {
+    const docRef = existingSnap.docs[0].ref;
+    try {
+      await docRef.set({
+        username: username,
+        name: fullName,
+        role: existingSnap.docs[0].data().role || 'rank_file',
+        yvpId: emp.yvpId || yvpId,
+        email: email,
+        pendingPassword: password,
+        passwordResetToDefault: true,
+        passwordResetAt: firebase.firestore.FieldValue.serverTimestamp(),
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+      }, { merge: true });
+    } catch (e) {
+      console.error(e);
+    }
+    showInfoModal(
+      'Login Already Exists — Relinked',
+      'Username: ' + username + '\nDefault password: ' + password + '\n\n' +
+      'This login was left over from before. It is now linked again to this employee.\n\n' +
+      'If login still fails, the Auth password may be old. Options:\n' +
+      '1) Try password: ' + password + '\n' +
+      '2) Firebase Console → Authentication → find ' + email + ' → Reset password / Delete user, then click Create Login again.\n' +
+      '3) Or click Reset Password on Employee Info, then have the employee use the default password.'
+    );
+    return;
+  }
+
+  // No Firestore profile — create Auth + profile
+  try {
+    const cred = await _auth.createUserWithEmailAndPassword(email, password);
+    await _db.collection('users').doc(cred.user.uid).set({
+      username: username,
+      name: fullName,
+      role: 'rank_file',
+      yvpId: emp.yvpId || yvpId,
+      email: email,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    showInfoModal('Login Created', 'Username: ' + username + '\nPassword: ' + password);
+  } catch (e) {
+    console.error(e);
+    if (e.code === 'auth/email-already-in-use') {
+      // Auth user exists but no (or missing) Firestore profile — recreate profile
+      try {
+        await _db.collection('users').add({
+          username: username,
+          name: fullName,
+          role: 'rank_file',
+          yvpId: emp.yvpId || yvpId,
+          email: email,
+          pendingPassword: password,
+          passwordResetToDefault: true,
+          createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+      } catch (e2) { console.error(e2); }
+      showInfoModal(
+        'Auth Account Already Exists',
+        'Firebase Auth already has: ' + email + '\nUsername: ' + username + '\n\n' +
+        'A user profile was created/linked in the database.\n\n' +
+        'If you cannot log in with password "' + password + '", go to:\n' +
+        'Firebase Console → Authentication → Users → select this user →\n' +
+        'Delete user (or reset password), then click Create Login again.'
+      );
+    } else {
+      showToast('Failed to create login: ' + e.message, 'error');
+    }
+  }
+}
+
+
+async function deleteEmployee(yvpId) {
+  if (!yvpId) { showToast('Missing YVP ID', 'error'); return; }
+  if (!confirm('Delete employee ' + yvpId + '? This cannot be undone.\n\nTheir Users login profile will also be removed when possible.')) return;
+  try {
+    const _db = (typeof getDb === 'function') ? getDb() : db;
+    const ref = _db.collection('employees').doc(yvpId);
+    const doc = await ref.get();
+    if (doc.exists) {
+      await ref.delete();
+    } else {
+      const q = await _db.collection('employees').where('yvpId', '==', yvpId).get();
+      if (q.empty) {
+        showToast('Employee not found', 'error');
+        return;
+      }
+      for (const d of q.docs) { await d.ref.delete(); }
+    }
+    const username = String(yvpId).toLowerCase().replace(/\s+/g, '');
+    try {
+      const uq = await _db.collection('users').where('username', '==', username).get();
+      for (const d of uq.docs) { await d.ref.delete(); }
+      const uq2 = await _db.collection('users').where('yvpId', '==', yvpId).get();
+      for (const d of uq2.docs) { await d.ref.delete(); }
+    } catch (e2) { console.error(e2); }
+
+    if (typeof cachedEmployees !== 'undefined') {
+      cachedEmployees = (cachedEmployees || []).filter(function(e){ return e.yvpId !== yvpId; });
+    }
+    showToast('Employee ' + yvpId + ' deleted');
+    if (typeof loadEmployees === 'function') loadEmployees();
+    if (typeof preloadGlobalData === 'function') preloadGlobalData();
+  } catch (e) {
+    console.error(e);
+    showToast('Failed to delete employee: ' + e.message, 'error');
+  }
+}
+
+
+function filterAttendanceReport() {
+  const q = ((document.getElementById('rptSearch') || {}).value || '').toLowerCase().trim();
+  const tbody = document.getElementById('rptTbody');
+  if (!tbody) return;
+  const rows = tbody.querySelectorAll('tr');
+  let visible = 0;
+  rows.forEach(function(tr) {
+    // skip empty-state rows (single cell)
+    if (tr.cells.length <= 1 && (tr.textContent || '').indexOf('No attendance') >= 0) {
+      tr.style.display = q ? 'none' : '';
+      return;
+    }
+    const yvp = (tr.cells[0] ? tr.cells[0].textContent : '').toLowerCase();
+    const name = (tr.cells[1] ? tr.cells[1].textContent : '').toLowerCase();
+    const show = !q || yvp.indexOf(q) >= 0 || name.indexOf(q) >= 0;
+    tr.style.display = show ? '' : 'none';
+    if (show) visible++;
+  });
 }
 
 </script>
