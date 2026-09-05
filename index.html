@@ -693,7 +693,7 @@ Bank Name: Wise Pilipinas Inc.</textarea>
 
           <div style="margin-top:18px;text-align:center">
             <h4 style="color:#1a237e;margin-bottom:10px">SCAN TO PAY</h4>
-            <div id="invQrPreview" style="min-height:120px;display:flex;align-items:center;justify-content:center;border:1px dashed #bbb;border-radius:10px;padding:12px;background:#fafafa">
+            <div id="invQrPreview" style="min-height:280px;display:flex;align-items:center;justify-content:center;border:1px dashed #bbb;border-radius:12px;padding:16px;background:#fafafa">
               <span style="color:#999;font-size:13px">No QR code uploaded</span>
             </div>
             <div style="margin-top:10px;display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
@@ -3047,7 +3047,7 @@ function uploadInvoiceQr(event) {
   const reader = new FileReader();
   reader.onload = function(e) {
     const prev = document.getElementById('invQrPreview');
-    prev.innerHTML = '<img src="' + e.target.result + '" alt="QR" style="width:120px;height:160px;object-fit:cover;border:1px solid #ccc;border-radius:4px"/>';
+    prev.innerHTML = '<img src="' + e.target.result + '" alt="QR" style="width:260px;height:260px;object-fit:contain;border:1px solid #ddd;border-radius:12px;background:#fff;padding:8px"/>';
     window._invoiceQrDataUrl = e.target.result;
   };
   reader.readAsDataURL(file);
@@ -3446,7 +3446,7 @@ function exportInvoicePdf() {
     });
     if (!agentRows) agentRows = '<tr><td colspan="4" style="text-align:center;color:#999">No agents</td></tr>';
     var qr = window._invoiceQrDataUrl
-      ? '<img src="' + window._invoiceQrDataUrl + '" style="width:120px;height:160px;object-fit:cover;border:1px solid #ccc"/>'
+      ? '<img src="' + window._invoiceQrDataUrl + '" style="width:260px;height:260px;object-fit:contain;border:1px solid #ddd;border-radius:12px;background:#fff;padding:8px"/>'
       : '<span style="color:#999">No QR uploaded</span>';
     var htmlDoc = '<!DOCTYPE html><html><head><meta charset="UTF-8"/><title>' + escapeHtml(invNo || 'Invoice') + '</title><style>'
       + 'body{font-family:Segoe UI,Arial,sans-serif;color:#222;padding:28px;max-width:800px;margin:0 auto}'
